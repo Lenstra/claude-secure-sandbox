@@ -14,7 +14,8 @@ How it works and why it is built this way: [architecture document](docs/ARCHITEC
 1. [Installation on macOS](#installation-on-macos)
 2. [Installation on Linux](#installation-on-linux)
 3. [Usage](#usage)
-4. [Documentation](#documentation)
+4. [Uninstallation](#uninstallation)
+5. [Documentation](#documentation)
 
 ## Installation on macOS
 
@@ -124,6 +125,14 @@ claude                                          # 6. next session, from your lat
 6. **Next session.** The wrapper sees that Claude's commits are in your branch, even as signed copies, and Claude starts from your latest commit. If you run `claude` before integrating them, Claude continues on its own commits; if both of you committed in between, the wrapper asks what to do ([branches at a new session](docs/ARCHITECTURE.md#branches-at-a-new-session)).
 
 `claude --continue` and `claude --resume` resume the previous conversation, with the copy as Claude left it.
+
+## Uninstallation
+
+```bash
+./uninstall.sh
+```
+
+The script removes what the tool created outside its own directory: the `claude` remote and the confirmations of removed protections in each repository you used it in, then, after asking, the wrapper's state (Claude's copies, archives, sessions, its copy of your Claude Code login) and its configuration. It first lists Claude's branches you never fetched, since they would be lost. Your repositories and Claude Code itself are left untouched. It does not edit your shell startup file: it tells you which line to remove to take the wrapper off your `PATH`. Then delete the `claude-secure-sandbox` directory.
 
 ## Documentation
 

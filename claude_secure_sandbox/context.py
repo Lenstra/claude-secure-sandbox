@@ -7,7 +7,7 @@ import re
 from typing import List, Optional
 
 from .common import (Config, Git, Lock, die, ensure_real_dir, git_copy, git_copy_raw,
-                     git_dev, sha1, warn)
+                     git_dev, sha1, warn, write_text)
 
 
 class Context:
@@ -67,6 +67,8 @@ class Context:
                 os.makedirs(d, exist_ok=True)
         except OSError:
             die(f"cannot create {self.repo_dir}")
+        # The repository this state belongs to, for uninstall.sh.
+        write_text(self.state_file("repository"), self.dev_root + "\n")
         ensure_real_dir(self.tmp)
         if os.path.islink(self.work):
             warn(f"{self.work} was replaced by a link: removed")

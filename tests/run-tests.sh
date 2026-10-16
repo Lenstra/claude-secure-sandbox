@@ -584,6 +584,26 @@ out=$(cd "$D" && claude 2>&1)
 check "allow_read inside ~/.ssh refused" sh -c "printf '%s' '$out' | grep -q 'conflicts with $T/home/.ssh'"
 check_not "claude not started (allow_read refused)" sh -c "printf '%s' '$out' | grep -q '^SANDBOXED'"
 
+# --- uninstall ----------------------------------------------------------------------
+
+section "uninstall"
+echo "{ \"claude_bin\": \"$T/fakebin/claude\" }" > "$T/config.json"
+cat > "$T/fakebin/s-unfetched.sh" <<'EOF'
+git checkout -q -b never-fetched && echo z > src/z.txt && git add src/z.txt && git commit -qm "never fetched"
+EOF
+run_claude "$T/fakebin/s-unfetched.sh"
+echo "export PATH=\"$ROOT/bin:\$PATH\"" > "$T/home/.zshrc"
+printf 'n\n' | "$ROOT/uninstall.sh" > "$T/out/uninstall-refused" 2>&1
+check "unfetched branch reported" grep -q "never-fetched was never fetched" "$T/out/uninstall-refused"
+check "nothing removed when refused" git -C "$D" config --get remote.claude.url
+"$ROOT/uninstall.sh" -y > "$T/out/last" 2>&1
+check "remote claude removed" sh -c "! git -C '$D' config --get remote.claude.url"
+check "confirmations removed from the repository" test ! -e "$D/.git/claude-secure-sandbox"
+check "state deleted" test ! -e "$STATE_ROOT"
+check "configuration deleted" test ! -e "$CLAUDE_SECURE_SANDBOX_CONFIG"
+check "PATH line reported" grep -q "remove line 1 of $T/home/.zshrc" "$T/out/last"
+check "the repository itself untouched" grep -q "SECRET" "$D/secret/s.txt"
+
 # --- summary -----------------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILED"
