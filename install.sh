@@ -49,8 +49,11 @@ Next steps:
 
   3. Log in to Claude Code if you have not yet: claude-unsandboxed, then /login.
 
-Optional configuration: ~/.config/$NAME/config.json
-Example: $ROOT/share/config.example.json
+Optional: to allow more network domains or readable directories for your
+tools, create the wrapper's configuration from the example:
+
+    mkdir -p ~/.config/$NAME
+    cp $ROOT/share/config.example.json ~/.config/$NAME/config.json
 MSG
 if [ -z "$real" ]; then
   echo
