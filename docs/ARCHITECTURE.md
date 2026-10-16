@@ -323,6 +323,10 @@ MCP servers live in `~/.claude.json`, which is Claude Code's state rather than c
 
 `run/gitconfig` sets the developer's name and email, `commit.gpgsign = false` (no key in the sandbox), and `core.excludesFile` and `core.attributesFile` to `/dev/null`, since their defaults under `~/.config` are unreadable.
 
+### Session marker
+
+A sandboxed session shows itself, so that the developer notices when `claude` is not the wrapper. At launch, in a terminal only, the wrapper prints a green banner: the mode, the repository and branch or the directory, the number of protected paths, and what Claude can read. During the session, Claude Code's status line reads `🔒 sandboxed · protected repository <name> · <branch>` (or `· directory <name>`), passed with the other settings on Claude Code's command line; it is left out when the developer configured their own status line, in `~/.claude` or in the repository.
+
 ### System prompt
 
 The prompt appended to Claude's depends on the mode. In protected mode (`share/prompts/protected-mode.md`) it tells Claude which paths are protected, that their content is absent on purpose, that the placeholder line is not code, that it cannot build what depends on protected code, and how the git workflow works. Both prompts (`share/prompts/directory-mode.md` for directory mode) say what the sandbox makes unreadable, that git hosts are unreachable, and that `.git` configuration and hooks are read-only. Prompts guide Claude but guarantee nothing; only the sandbox does.
@@ -569,7 +573,7 @@ flowchart LR
 - [x] Claude Code's login copied from the keychain, without opening the keychain.
 - [x] Linux (bubblewrap), with the end-to-end suite run in Docker (`npm run test:linux`).
 - [x] Separate Claude configuration, synced one way.
-- [x] End-to-end tests: 188 on macOS, 184 on Linux.
+- [x] End-to-end tests: 191 on macOS; the same suite on Linux, minus the macOS-only checks.
 
 ### Next: validation on a real machine
 

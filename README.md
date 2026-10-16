@@ -94,6 +94,8 @@ System directories (`/usr`, `/lib`, `/etc`, `/opt`, and `/nix/store`, `/snap` or
 
 ## Usage
 
+Every `claude` session runs in the sandbox, and shows it: a green `🔒 claude-secure-sandbox: sandboxed session` banner at launch, and the Claude Code status line `🔒 sandboxed · protected repository my-repo · feature-x` during the session (unless you configured your own status line). If you see neither, `claude` is not the wrapper: check your `PATH`.
+
 The real binary stays available as `claude-unsandboxed`, for the rare session that must run without the sandbox.
 
 > [!WARNING]

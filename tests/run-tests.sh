@@ -235,7 +235,9 @@ run_claude "$T/fakebin/s1.sh"
 check "claude runs inside the sandbox" grep -q '^SANDBOXED' "$T/out/last"
 check "claude runs in the copy" grep -q "^SANDBOXED cwd=$COPY/work" "$T/out/last"
 check "system prompt passed" grep -q -- '--append-system-prompt-file' "$T/out/last"
-check "Claude Code's own sandbox disabled" grep -q -- '"sandbox":{"enabled":false}' "$T/out/last"
+check "Claude Code's own sandbox disabled" grep -q -- '"sandbox": {"enabled": false}' "$T/out/last"
+check "status line marks the session as sandboxed" grep -q -- '"statusLine".*sandboxed · protected repository repo · main' "$T/out/last"
+check "no banner when the output is not a terminal" sh -c "! grep -q 'sandboxed session' '$T/out/last'"
 collect
 check "absent public file reported" sh -c "grep -q 'a protected file has the same content' '$T/out/last' && grep -q '^  src/dup.txt' '$T/out/last'"
 
@@ -351,6 +353,7 @@ check "choice 2: quit to integrate first" grep -q "integrate Claude's commits (g
 check_not "choice 2: claude not started" grep -q '^SANDBOXED' "$T/out/last"
 run_claude_answer 1 "$T/fakebin/s-dev.sh"
 check "choice 1: backup announced" grep -q "Claude's main kept: git fetch claude refs/backup/" "$T/out/last"
+check "banner in a terminal" grep -q "claude-secure-sandbox: sandboxed session" "$T/out/last"
 collect
 ref=$(sed -n "s/.*git fetch claude \(refs\/backup\/[^ ]*\).*/\1/p" "$T/out/last" | tr -d '\r' | head -1)
 check "choice 1: Claude's commit retrievable" sh -c "git -C '$D' fetch -q claude '$ref' && git -C '$D' cat-file -e FETCH_HEAD:src/d.txt"

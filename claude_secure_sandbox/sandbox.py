@@ -10,6 +10,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 from typing import List
 
 from .common import (NAME, PLACEHOLDER_TEXT, PROTECT_FILE, die, ensure_real_dir, install_file, volume_roots,
@@ -515,6 +516,49 @@ def write_system_prompt(ctx: Context) -> None:
     write_text(os.path.join(ctx.run_dir, "system-prompt.md"), "\n".join(lines))
 
 
+def _session_label(ctx: Context) -> str:
+    if ctx.directory_mode:
+        return f"directory {os.path.basename(ctx.work)}"
+    branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
+    return f"protected repository {os.path.basename(ctx.dev_root)} · {branch}"
+
+
+def _has_status_line(ctx: Context) -> bool:
+    """True if the developer configured their own Claude Code status line."""
+    home = os.path.join(os.environ["HOME"], ".claude")
+    for f in (os.path.join(home, "settings.json"), os.path.join(home, "settings.local.json"),
+              os.path.join(ctx.work, ".claude", "settings.json"),
+              os.path.join(ctx.work, ".claude", "settings.local.json")):
+        data = _load_json(f) if os.path.isfile(f) else None
+        if isinstance(data, dict) and data.get("statusLine"):
+            return True
+    return False
+
+
+def claude_settings(ctx: Context) -> str:
+    """Settings passed on Claude Code's command line: its own sandbox off
+    (srt wraps it), and a status line that marks the session as sandboxed,
+    unless the developer has their own."""
+    settings: dict = {"sandbox": {"enabled": False}}
+    if not _has_status_line(ctx):
+        text = f"🔒 sandboxed · {_session_label(ctx)}"
+        settings["statusLine"] = {"type": "command",
+                                  "command": f"printf '\\033[1;32m%s\\033[0m' {shlex.quote(text)}"}
+    return json.dumps(settings, ensure_ascii=False)
+
+
+def print_banner(ctx: Context) -> None:
+    """Marks the start of a sandboxed session in the terminal."""
+    if not sys.stderr.isatty():
+        return
+    where = "this directory" if ctx.directory_mode else "this filtered copy"
+    lines = [f"\033[1;32m🔒 {NAME}: sandboxed session\033[0m", f"   {_session_label(ctx)}"]
+    if not ctx.directory_mode:
+        lines.append(f"   {len(ctx.protected)} protected path(s) absent from the copy")
+    lines.append(f"   Claude reads {where}, the system and installed tools; nothing else of yours")
+    print("\n".join(lines) + "\n", file=sys.stderr, flush=True)
+
+
 def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
     """Runs Claude Code inside srt. Returns claude's exit status."""
     env = dict(os.environ)
@@ -540,11 +584,12 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
     cmd = [ctx.srt, "--settings", os.path.join(ctx.run_dir, "srt-settings.json"), "--",
            # The real path: links outside the readable areas do not resolve.
            "/usr/bin/env", f"TMPDIR={ctx.tmp}/", realpath(ctx.real_claude),
-           "--settings", '{"sandbox":{"enabled":false}}',
+           "--settings", claude_settings(ctx),
            "--append-system-prompt-file", os.path.join(ctx.run_dir, "system-prompt.md"), *args]
     # Ctrl-C goes to Claude; the wrapper must survive to print the end of
     # session summary. A handler (unlike an ignored signal) is reset in child
     # processes.
     signal.signal(signal.SIGINT, lambda *_: None)
+    print_banner(ctx)
     status = subprocess.call(cmd, cwd=cwd, env=env)
     return 128 - status if status < 0 else status
