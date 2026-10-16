@@ -151,8 +151,9 @@ In both modes the rest of the machine is unreadable (section 7), so a protected 
 The file sits at the repository root, is committed, and lists one path per line:
 
 ```
-# proprietary code
-core/engine
+# a directory: everything below it, at any depth
+core/engine/
+# a single file
 licensing/keys.go
 ```
 
@@ -568,7 +569,7 @@ flowchart LR
 - [x] Claude Code's login copied from the keychain, without opening the keychain.
 - [x] Linux (bubblewrap), with the end-to-end suite run in Docker (`npm run test:linux`).
 - [x] Separate Claude configuration, synced one way.
-- [x] End-to-end tests: 189 on macOS, 185 on Linux.
+- [x] End-to-end tests: 188 on macOS, 184 on Linux.
 
 ### Next: validation on a real machine
 
@@ -610,7 +611,7 @@ Per repository, in `~/.cache/claude-secure-sandbox/<repo>-<hash>/`:
 | `state/host-tips` | developer commits already fetched and scanned | none |
 | `state/protect-hash` | hash of the protected list | none |
 | `state/reported-absent` | public files already reported as absent | none |
-| `state/repository` | path of the developer's repository, so that `uninstall.sh` can list what is left to delete | none |
+| `state/repository` | path of the developer's repository, so that `uninstall.sh` can list what to remove | none |
 | `state/lock`, `state/tmp` | session lock, wrapper temp files | none |
 | `archive/<date>-<reason>/` | previous copies and sessions, after a rebuild | none |
 
@@ -635,7 +636,7 @@ share/prompts/protected-mode.md             prompt for protected mode
 share/prompts/directory-mode.md             prompt for directory mode
 share/config.example.json                   configuration example
 install.sh                                  dependency check and npm ci
-uninstall.sh                                takes the wrapper off the PATH, lists what is left to delete
+uninstall.sh                                lists what to remove to uninstall, with the commands
 tests/run-tests.sh                          end-to-end tests
 tests/test_unit.py                          unit tests of the pure functions
 tests/linux/Dockerfile                      Linux test environment (Debian, bubblewrap)
@@ -650,6 +651,6 @@ Run the tests with `npm test` (`jq` is needed by the end-to-end suite), and on L
 - the branch choice at a new session (Claude ahead, integrated after a rebase, diverged with each answer), the developer's other branches (kept, updated, deleted), resume;
 - removed protections (no terminal, refused, confirmed, protected again), `.claudeprotected` additions, tampering with `.git`, planted links;
 - directory mode, the home directory refused, Claude Code's login and temp root, the configuration passed through read only and the MCP servers copied, launch cases and refused configurations;
-- `uninstall.sh`: the PATH line removed and the startup file backed up, the rest of it kept, unfetched branches reported, remote, state and configuration left in place with their removal commands shown.
+- `uninstall.sh`: nothing changed, the PATH line located, unfetched branches reported, the removal commands of the remote, the state and the configuration shown.
 
 Tested on macOS 27 (git 2.50, Claude Code 2.1.286) and Debian 12 in Docker on arm64 (Claude Code 2.1.301 started in the sandbox), with srt 0.0.78.

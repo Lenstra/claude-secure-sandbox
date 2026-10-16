@@ -593,10 +593,10 @@ git checkout -q -b never-fetched && echo z > src/z.txt && git add src/z.txt && g
 EOF
 run_claude "$T/fakebin/s-unfetched.sh"
 printf 'alias ll="ls -l"\nexport PATH="%s/bin:$PATH"\n' "$ROOT" > "$T/home/.zshrc"
+cp "$T/home/.zshrc" "$T/zshrc-before"
 "$ROOT/uninstall.sh" > "$T/out/last" 2>&1
-check "PATH line removed" sh -c "! grep -q '$ROOT/bin' '$T/home/.zshrc'"
-check "rest of the startup file kept" grep -q 'alias ll' "$T/home/.zshrc"
-check "startup file backed up" sh -c "grep -q '$ROOT/bin' '$T/home/.zshrc'.claude-secure-sandbox-*.bak"
+check "startup file not changed" cmp -s "$T/home/.zshrc" "$T/zshrc-before"
+check "PATH line shown" grep -q "$T/home/.zshrc, line 2: export PATH" "$T/out/last"
 check "unfetched branch reported" grep -q "never-fetched was never fetched" "$T/out/last"
 check "remote kept, removal command shown" sh -c "git -C '$D' config --get remote.claude.url && grep -q \"remote remove claude\" '$T/out/last'"
 check "state kept, removal command shown" sh -c "test -d '$STATE_ROOT' && grep -q \"rm -rf '$STATE_ROOT'\" '$T/out/last'"

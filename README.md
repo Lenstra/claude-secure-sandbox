@@ -78,14 +78,15 @@ The real binary stays available as `claude-unsandboxed`, for the rare session th
 Commit a `.claudeprotected` file at the repository root, one path per line:
 
 ```
-# proprietary code
-core/engine
+# a directory: everything below it, at any depth
+core/engine/
+# a single file
 licensing/keys.go
 ```
 
-- Paths are relative to the root. To protect a whole directory, list the directory itself: `core/engine` (or `core/engine/`) covers everything below it, at any depth.
+- Paths are relative to the root. A directory protects everything below it, at any depth; the trailing `/` is optional.
 - Literal paths only: no `*`, `?`, `[` or `!`. Absolute paths, `..`, `.git` and the file itself are refused.
-- Lines starting with `#` are comments.
+- Lines starting with `#` are comments; a `#` after a path is part of the path.
 
 That is all the setup a repository needs. Everything else is created by the wrapper, on your machine only.
 
@@ -128,13 +129,31 @@ claude                                          # 6. next session, from your lat
 
 ## Uninstallation
 
-```bash
-./uninstall.sh
-```
+`./uninstall.sh` changes nothing: it lists what to remove on your machine, with the exact paths and commands. Remove, in this order:
 
-The script takes the wrapper off your `PATH`: it removes the line that puts its `bin` directory there from your shell startup files, and keeps a backup of each file it changes. In a new shell, `claude` runs Claude Code directly.
+1. **The PATH line** you added to `~/.zshrc` or `~/.bashrc` (`export PATH=".../claude-secure-sandbox/bin:$PATH"`), then open a new shell: `claude` runs Claude Code directly.
+2. **In each repository you used it in**, the `claude` remote and your confirmed removals of protection. Fetch Claude's branches first if you want to keep them; the script lists the ones you never fetched.
 
-Nothing else is removed. The script prints what is left for you to delete, with the commands: the `claude` remote and the confirmed removals of protection in each repository you used the tool in, the wrapper's state (Claude's copies, archives, sessions, its copy of your Claude Code login), its configuration, and the tool's directory. It also lists Claude's branches you never fetched, so that you can fetch them before deleting the state.
+   ```bash
+   git remote remove claude
+   rm -rf .git/claude-secure-sandbox
+   ```
+
+3. **The wrapper's state**: Claude's copies, archives and sessions, and its copy of your Claude Code login.
+
+   ```bash
+   rm -rf ~/.cache/claude-secure-sandbox
+   ```
+
+4. **The configuration**, if you created one.
+
+   ```bash
+   rm -rf ~/.config/claude-secure-sandbox
+   ```
+
+5. **The tool itself**: the `claude-secure-sandbox` directory.
+
+Claude Code itself is not affected.
 
 ## Documentation
 
