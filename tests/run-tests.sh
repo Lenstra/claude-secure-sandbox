@@ -556,6 +556,8 @@ check "directory without a repository: sandboxed" grep -q "^SANDBOXED cwd=$T/pla
 collect
 out=$(cd "$T/home" && claude 2>&1 < /dev/null)
 check "refused in the home directory" sh -c "printf '%s' '$out' | grep -q 'holds your home directory'"
+( cd / && claude ) < /dev/null > "$T/out/root" 2>&1
+check "refused in /, saying where claude was started" grep -q "claude was started in /\. A session can read its whole directory" "$T/out/root"
 out=$(cd "$D" && claude --version 2>&1)
 check "--version without sandbox" sh -c "printf '%s' '$out' | grep -q '^UNSANDBOXED --version'"
 out=$(cd "$D/secret" && claude 2>&1)

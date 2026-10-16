@@ -87,7 +87,9 @@ def main(root: str, args: List[str]) -> int:
     home = os.environ["HOME"]
     if ctx.dev_root == "/" or any(path_within(ctx.dev_root, s)
                                   for s in [home, os.path.dirname(home), ctx.state_root] + volume_roots()):
-        die(f"{ctx.dev_root} holds your home directory or credentials: run claude from a project directory")
+        where = f"in {cwd}" if ctx.dev_root == cwd else f"in {cwd}, in the git repository {ctx.dev_root}"
+        die(f"claude was started {where}. A session can read its whole directory, and this one holds "
+            "your home directory or other volumes, with your credentials: run claude from a project directory")
 
     nested = [f for f in find_nested_protect_files(ctx.dev_root) if not path_within(ctx.state_root, f)]
     if nested:
