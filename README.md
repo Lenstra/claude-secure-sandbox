@@ -33,7 +33,7 @@ cd ~/.local/share/claude-secure-sandbox
 
 Then, as `install.sh` tells you with your own paths:
 
-1. **Put the wrapper first on your `PATH`.** The `bin` directory holds the wrapper's two commands, `claude` and `claude-unsandboxed`. It must come before the directory of the real `claude` in your `PATH`. Add this line at the end of `~/.zshrc`:
+1. **Put the wrapper first on your `PATH`.** The `bin` directory holds the wrapper's two commands, `claude` and `claude-unsandboxed`. It must come before the directory of the real `claude` in your `PATH`. Add this line at the end of your shell startup file (`.zshrc` or `.zprofile` for zsh, `.bashrc` for bash):
 
    ```bash
    export PATH="$HOME/.local/share/claude-secure-sandbox/bin:$PATH"
@@ -72,7 +72,7 @@ cd ~/.local/share/claude-secure-sandbox
 
 Then, as `install.sh` tells you with your own paths:
 
-1. **Put the wrapper first on your `PATH`.** The `bin` directory holds the wrapper's two commands, `claude` and `claude-unsandboxed`. It must come before the directory of the real `claude` in your `PATH`. Add this line at the end of `~/.bashrc` (or `~/.zshrc`):
+1. **Put the wrapper first on your `PATH`.** The `bin` directory holds the wrapper's two commands, `claude` and `claude-unsandboxed`. It must come before the directory of the real `claude` in your `PATH`. Add this line at the end of your shell startup file (`.bashrc` for bash, `.zshrc` or `.zprofile` for zsh):
 
    ```bash
    export PATH="$HOME/.local/share/claude-secure-sandbox/bin:$PATH"
@@ -165,7 +165,7 @@ claude                                          # 6. next session, from your lat
 
 `./uninstall.sh` changes nothing: it lists what to remove on your machine, with the exact paths and commands. Remove, in this order:
 
-1. **The PATH line** you added to `~/.zshrc` or `~/.bashrc` (`export PATH=".../claude-secure-sandbox/bin:$PATH"`), then open a new shell: `claude` runs Claude Code directly.
+1. **The PATH line** you added to your shell startup file (`export PATH=".../claude-secure-sandbox/bin:$PATH"`), then open a new shell: `claude` runs Claude Code directly.
 2. **In each repository you used it in**, the `claude` remote and your confirmed removals of protection.
 
    ```bash

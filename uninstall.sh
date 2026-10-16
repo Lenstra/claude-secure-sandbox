@@ -22,8 +22,13 @@ title "The line that puts the wrapper on your PATH, then open a new shell: claud
 spellings=("$ROOT/bin")
 case "$ROOT" in "$HOME"/*) rest=${ROOT#"$HOME"}; spellings+=("\$HOME$rest/bin" "\${HOME}$rest/bin" "~$rest/bin") ;; esac
 found=0
-for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+zdot=${ZDOTDIR:-$HOME}
+seen=
+for rc in "$zdot/.zshrc" "$zdot/.zprofile" "$zdot/.zshenv" "$HOME/.config/zsh/.zshrc" "$HOME/.config/zsh/.zprofile" \
+          "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
   [ -f "$rc" ] || continue
+  case " $seen " in *" $rc "*) continue ;; esac
+  seen="$seen $rc"
   for s in "${spellings[@]}"; do
     while IFS=: read -r n text; do
       echo "   $rc, line $n: $text"; found=1

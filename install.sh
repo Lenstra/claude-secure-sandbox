@@ -73,11 +73,6 @@ chmod +x "$ROOT/bin/claude" "$ROOT/bin/claude-unsandboxed" "$ROOT/libexec/git-re
 
 real=$(command -v claude 2>/dev/null || true)
 
-case "$(basename "${SHELL:-}")" in
-  zsh) rc="~/.zshrc" ;;
-  bash) [ "$(uname -s)" = Darwin ] && rc="~/.bash_profile" || rc="~/.bashrc" ;;
-  *) rc="your shell startup file" ;;
-esac
 
 cat <<MSG
 
@@ -87,7 +82,8 @@ Next steps:
 
   1. Put the wrapper first on your PATH.
      $ROOT/bin holds its two commands, claude and claude-unsandboxed.
-     Add this line at the end of $rc:
+     Add this line at the end of your shell startup file
+     (.zshrc or .zprofile for zsh, .bashrc for bash):
 
          export PATH="$ROOT/bin:\$PATH"
 
