@@ -29,7 +29,7 @@ cd ~/.local/share/claude-secure-sandbox
 ```
 
 > [!IMPORTANT]
-> The cloned directory is the tool itself: keep it in a permanent place, such as `~/.local/share/claude-secure-sandbox`. Not in `Downloads`, a temporary directory or a folder synced by iCloud (`~/Documents` often is). If it is moved or deleted, `claude` silently runs Claude Code without the sandbox.
+> The cloned directory is the tool itself: keep it in a permanent place, such as `~/.local/share/claude-secure-sandbox`. Not in `Downloads`, a temporary directory or a folder synced by iCloud (`~/Documents` often is). If it is moved or deleted, `claude` silently runs Claude Code without the sandbox. If you cloned it elsewhere, `install.sh` offers to move it first.
 
 Then, as `install.sh` tells you with your own paths:
 
@@ -65,7 +65,7 @@ cd ~/.local/share/claude-secure-sandbox
 ```
 
 > [!IMPORTANT]
-> The cloned directory is the tool itself: keep it in a permanent place, such as `~/.local/share/claude-secure-sandbox`. Not in `Downloads`, a temporary directory or a synced folder. If it is moved or deleted, `claude` silently runs Claude Code without the sandbox.
+> The cloned directory is the tool itself: keep it in a permanent place, such as `~/.local/share/claude-secure-sandbox`. Not in `Downloads`, a temporary directory or a synced folder. If it is moved or deleted, `claude` silently runs Claude Code without the sandbox. If you cloned it elsewhere, `install.sh` offers to move it first.
 
 > [!NOTE]
 > On Ubuntu 24.04 and later, bubblewrap also needs user namespaces with capabilities: run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or add an AppArmor profile that grants `userns` to `bwrap`.

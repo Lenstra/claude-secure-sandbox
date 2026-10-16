@@ -20,16 +20,59 @@ python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' \
 command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1 \
   || echo "$NAME: fd not found, protection file detection will be slower" >&2
 
+# The directory is the tool: the PATH line points to it. A temporary or synced
+# place could lose it, and claude would then run Claude Code without the sandbox.
+risky() {
+  case "$1" in
+    "$HOME/Downloads"*|"$HOME/Desktop"*|"$HOME/Documents"*|"$HOME/Library/Mobile Documents"*|\
+    /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*) return 0 ;;
+  esac
+  return 1
+}
+moved=0
+if risky "$ROOT"; then
+  moved=1
+  if [ -t 0 ] && [ -z "${CLAUDE_SECURE_SANDBOX_MOVED:-}" ]; then
+    default="$HOME/.local/share/$NAME"
+    cat <<MSG
+The tool is in a place that may be temporary, synced or cleaned up:
+
+    $ROOT
+
+This directory is the tool itself: if it is moved or deleted later, claude
+silently runs Claude Code without the sandbox. Move it now?
+
+  1) $default (recommended)
+  2) another directory
+  3) keep it here
+
+MSG
+    printf 'Choice [1/2/3]: '
+    read -r choice || choice=3
+    dest=
+    case "$choice" in
+      1) dest=$default ;;
+      2) printf 'Directory: '; read -r dest || dest=; dest=${dest/#\~/$HOME} ;;
+    esac
+    if [ -n "$dest" ]; then
+      case "$dest" in /*) ;; *) dest="$PWD/$dest" ;; esac
+      if [ -e "$dest" ]; then
+        echo "$NAME: $dest already exists; nothing moved" >&2; exit 1
+      fi
+      mkdir -p "$(dirname "$dest")"
+      mv "$ROOT" "$dest"
+      echo "$NAME: moved to $dest (cd $dest in this terminal)"
+      echo
+      exec env CLAUDE_SECURE_SANDBOX_MOVED=1 "$dest/install.sh"
+    fi
+  fi
+fi
+
 (cd "$ROOT" && npm ci --silent)
 chmod +x "$ROOT/bin/claude" "$ROOT/bin/claude-unsandboxed" "$ROOT/libexec/git-remote-csnull"
 
 real=$(command -v claude 2>/dev/null || true)
-# The directory is the tool: the PATH line points to it.
-case "$ROOT" in
-  "$HOME/Downloads"*|"$HOME/Desktop"*|"$HOME/Documents"*|"$HOME/Library/Mobile Documents"*|/tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*)
-    moved=1 ;;
-  *) moved=0 ;;
-esac
+
 case "$(basename "${SHELL:-}")" in
   zsh) rc="~/.zshrc" ;;
   bash) [ "$(uname -s)" = Darwin ] && rc="~/.bash_profile" || rc="~/.bashrc" ;;
