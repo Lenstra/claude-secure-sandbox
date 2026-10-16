@@ -28,14 +28,22 @@ cd claude-secure-sandbox
 ./install.sh
 ```
 
-Put the `bin` directory first on your `PATH`, in `~/.zshrc`, then check that `claude` resolves to the wrapper:
+Then, as `install.sh` tells you with your own paths:
 
-```bash
-export PATH="$HOME/path/to/claude-secure-sandbox/bin:$PATH"
-command -v claude   # .../claude-secure-sandbox/bin/claude
-```
+1. **Put the wrapper first on your `PATH`.** The `bin` directory holds the wrapper's two commands, `claude` and `claude-unsandboxed`. It must come before the directory of the real `claude` in your `PATH`. Add this line at the end of `~/.zshrc`:
 
-Log in to Claude Code as usual (`claude-unsandboxed`, then `/login`). At each launch, the wrapper copies Claude Code's keychain entry, and only it, into the sandbox; the rest of your keychain stays unreadable.
+   ```bash
+   export PATH="$HOME/path/to/claude-secure-sandbox/bin:$PATH"
+   ```
+
+2. **Check**, in a new shell, that both commands come from the wrapper:
+
+   ```bash
+   command -v claude               # .../claude-secure-sandbox/bin/claude
+   command -v claude-unsandboxed   # .../claude-secure-sandbox/bin/claude-unsandboxed
+   ```
+
+3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies Claude Code's keychain entry, and only it, into the sandbox; the rest of your keychain stays unreadable.
 
 ## Installation on Linux
 
@@ -58,14 +66,22 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
 or an AppArmor profile that grants `userns` to `bwrap`.
 
-Put the `bin` directory first on your `PATH`, in `~/.bashrc` or `~/.zshrc`, then check that `claude` resolves to the wrapper:
+Then, as `install.sh` tells you with your own paths:
 
-```bash
-export PATH="$HOME/path/to/claude-secure-sandbox/bin:$PATH"
-command -v claude   # .../claude-secure-sandbox/bin/claude
-```
+1. **Put the wrapper first on your `PATH`.** The `bin` directory holds the wrapper's two commands, `claude` and `claude-unsandboxed`. It must come before the directory of the real `claude` in your `PATH`. Add this line at the end of `~/.bashrc` (or `~/.zshrc`):
 
-Log in to Claude Code as usual (`claude-unsandboxed`, then `/login`). At each launch, the wrapper copies `~/.claude/.credentials.json`, and only it, into the sandbox.
+   ```bash
+   export PATH="$HOME/path/to/claude-secure-sandbox/bin:$PATH"
+   ```
+
+2. **Check**, in a new shell, that both commands come from the wrapper:
+
+   ```bash
+   command -v claude               # .../claude-secure-sandbox/bin/claude
+   command -v claude-unsandboxed   # .../claude-secure-sandbox/bin/claude-unsandboxed
+   ```
+
+3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies `~/.claude/.credentials.json`, and only it, into the sandbox.
 
 System directories (`/usr`, `/lib`, `/etc`, `/opt`, and `/nix/store`, `/snap` or Linuxbrew when present) and the directories of your `PATH` outside your home directory are readable in the sandbox. If your distribution puts tools elsewhere, add them to `filesystem.allow_read` ([configuration](docs/ARCHITECTURE.md#10-configuration)).
 
