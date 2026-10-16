@@ -52,7 +52,7 @@ MSG
     dest=
     case "$choice" in
       1) dest=$default ;;
-      2) printf 'Directory: '; read -r dest || dest=; dest=${dest/#\~/$HOME} ;;
+      2) read -e -r -p 'Directory (Tab completes): ' dest || dest=; dest=${dest/#\~/$HOME} ;;
     esac
     if [ -n "$dest" ]; then
       case "$dest" in /*) ;; *) dest="$PWD/$dest" ;; esac
