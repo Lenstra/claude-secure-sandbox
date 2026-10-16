@@ -24,6 +24,12 @@ command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1 \
 chmod +x "$ROOT/bin/claude" "$ROOT/bin/claude-unsandboxed" "$ROOT/libexec/git-remote-csnull"
 
 real=$(command -v claude 2>/dev/null || true)
+# The directory is the tool: the PATH line points to it.
+case "$ROOT" in
+  "$HOME/Downloads"*|"$HOME/Desktop"*|"$HOME/Documents"*|"$HOME/Library/Mobile Documents"*|/tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*)
+    moved=1 ;;
+  *) moved=0 ;;
+esac
 case "$(basename "${SHELL:-}")" in
   zsh) rc="~/.zshrc" ;;
   bash) [ "$(uname -s)" = Darwin ] && rc="~/.bash_profile" || rc="~/.bashrc" ;;
@@ -55,6 +61,16 @@ tools, create the wrapper's configuration from the example:
     mkdir -p ~/.config/$NAME
     cp $ROOT/share/config.example.json ~/.config/$NAME/config.json
 MSG
+if [ "$moved" = 1 ]; then
+  echo
+  echo "Warning: the tool is in a place that may be temporary, synced or cleaned up:"
+  echo
+  echo "    $ROOT"
+  echo
+  echo "This directory is the tool itself. Move it to a permanent place, such as"
+  echo "~/.local/share/$NAME, then run install.sh again from there: if it is"
+  echo "moved or deleted later, claude silently runs Claude Code without the sandbox."
+fi
 if [ -z "$real" ]; then
   echo
   echo "Warning: Claude Code was not found on your PATH. Install it before using $NAME."

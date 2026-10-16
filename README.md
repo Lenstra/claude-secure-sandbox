@@ -23,17 +23,20 @@ Requirements: git, Python 3.9 or later (the one of the Xcode Command Line Tools 
 
 ```bash
 brew install ripgrep node fd
-git clone git@github.com:Lenstra/claude-secure-sandbox.git
-cd claude-secure-sandbox
+git clone git@github.com:Lenstra/claude-secure-sandbox.git ~/.local/share/claude-secure-sandbox
+cd ~/.local/share/claude-secure-sandbox
 ./install.sh
 ```
+
+> [!IMPORTANT]
+> The cloned directory is the tool itself: keep it in a permanent place, such as `~/.local/share/claude-secure-sandbox`. Not in `Downloads`, a temporary directory or a folder synced by iCloud (`~/Documents` often is). If it is moved or deleted, `claude` silently runs Claude Code without the sandbox.
 
 Then, as `install.sh` tells you with your own paths:
 
 1. **Put the wrapper first on your `PATH`.** The `bin` directory holds the wrapper's two commands, `claude` and `claude-unsandboxed`. It must come before the directory of the real `claude` in your `PATH`. Add this line at the end of `~/.zshrc`:
 
    ```bash
-   export PATH="$HOME/path/to/claude-secure-sandbox/bin:$PATH"
+   export PATH="$HOME/.local/share/claude-secure-sandbox/bin:$PATH"
    ```
 
 2. **Check**, in a new shell, that both commands come from the wrapper:
@@ -56,10 +59,13 @@ Requirements: git, Python 3.9 or later, Node.js 20 or later, `ripgrep`, `bubblew
 sudo apt-get install git python3 nodejs npm ripgrep bubblewrap socat fd-find   # Debian, Ubuntu
 sudo dnf install git python3 nodejs npm ripgrep bubblewrap socat fd-find       # Fedora
 sudo pacman -S git python nodejs npm ripgrep bubblewrap socat fd                # Arch
-git clone git@github.com:Lenstra/claude-secure-sandbox.git
-cd claude-secure-sandbox
+git clone git@github.com:Lenstra/claude-secure-sandbox.git ~/.local/share/claude-secure-sandbox
+cd ~/.local/share/claude-secure-sandbox
 ./install.sh
 ```
+
+> [!IMPORTANT]
+> The cloned directory is the tool itself: keep it in a permanent place, such as `~/.local/share/claude-secure-sandbox`. Not in `Downloads`, a temporary directory or a synced folder. If it is moved or deleted, `claude` silently runs Claude Code without the sandbox.
 
 > [!NOTE]
 > On Ubuntu 24.04 and later, bubblewrap also needs user namespaces with capabilities: run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or add an AppArmor profile that grants `userns` to `bwrap`.
@@ -69,7 +75,7 @@ Then, as `install.sh` tells you with your own paths:
 1. **Put the wrapper first on your `PATH`.** The `bin` directory holds the wrapper's two commands, `claude` and `claude-unsandboxed`. It must come before the directory of the real `claude` in your `PATH`. Add this line at the end of `~/.bashrc` (or `~/.zshrc`):
 
    ```bash
-   export PATH="$HOME/path/to/claude-secure-sandbox/bin:$PATH"
+   export PATH="$HOME/.local/share/claude-secure-sandbox/bin:$PATH"
    ```
 
 2. **Check**, in a new shell, that both commands come from the wrapper:
