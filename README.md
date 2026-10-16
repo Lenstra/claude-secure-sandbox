@@ -45,6 +45,9 @@ Then, as `install.sh` tells you with your own paths:
 
 3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies Claude Code's keychain entry, and only it, into the sandbox; the rest of your keychain stays unreadable.
 
+> [!IMPORTANT]
+> If `command -v claude` does not point to the wrapper, `claude` runs Claude Code without any sandbox. Check it again after updating Claude Code or changing your `PATH`.
+
 ## Installation on Linux
 
 Requirements: git, Python 3.9 or later, Node.js 20 or later, `ripgrep`, `bubblewrap` and `socat`. `fd` is optional and speeds up launch.
@@ -58,13 +61,8 @@ cd claude-secure-sandbox
 ./install.sh
 ```
 
-On Ubuntu 24.04 and later, bubblewrap also needs user namespaces with capabilities:
-
-```bash
-sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-```
-
-or an AppArmor profile that grants `userns` to `bwrap`.
+> [!NOTE]
+> On Ubuntu 24.04 and later, bubblewrap also needs user namespaces with capabilities: run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or add an AppArmor profile that grants `userns` to `bwrap`.
 
 Then, as `install.sh` tells you with your own paths:
 
@@ -82,6 +80,9 @@ Then, as `install.sh` tells you with your own paths:
    ```
 
 3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies `~/.claude/.credentials.json`, and only it, into the sandbox.
+
+> [!IMPORTANT]
+> If `command -v claude` does not point to the wrapper, `claude` runs Claude Code without any sandbox. Check it again after updating Claude Code or changing your `PATH`.
 
 System directories (`/usr`, `/lib`, `/etc`, `/opt`, and `/nix/store`, `/snap` or Linuxbrew when present) and the directories of your `PATH` outside your home directory are readable in the sandbox. If your distribution puts tools elsewhere, add them to `filesystem.allow_read` ([configuration](docs/ARCHITECTURE.md#10-configuration)).
 
@@ -105,7 +106,10 @@ licensing/keys.go
 
 - Paths are relative to the root. A directory protects everything below it, at any depth; the trailing `/` is optional.
 - Literal paths only: no `*`, `?`, `[` or `!`. Absolute paths, `..`, `.git` and the file itself are refused.
-- Lines starting with `#` are comments; a `#` after a path is part of the path.
+- Lines starting with `#` are comments.
+
+> [!NOTE]
+> A `#` after a path is part of the path: put comments on their own line.
 
 That is all the setup a repository needs. Everything else is created by the wrapper, on your machine only.
 
@@ -135,7 +139,7 @@ claude                                          # 6. next session, from your lat
      next: git fetch claude, then on feature-x: git cherry-pick -S feature-x..claude/feature-x
    ```
 
-3. **Fetch and review.** The `claude` remote was added to your repository at the first launch; it points to Claude's copy, and push to it is disabled. Review Claude's commits like any contribution: build scripts, `package.json` or CI changes run on your machine or your CI once merged.
+3. **Fetch and review.** The `claude` remote was added to your repository at the first launch; it points to Claude's copy, and push to it is disabled.
 4. **Integrate.** Two cases, depending on whether you sign your commits:
    - **You do not sign them:** `git rebase claude/feature-x`. If you have not committed on `feature-x` in the meantime, your branch simply moves forward to Claude's last commit; otherwise your new commits are replayed after Claude's.
    - **You sign them:** your signing key never enters the sandbox, so Claude's commits are unsigned. `git cherry-pick -S feature-x..claude/feature-x` copies Claude's commits that are not in your branch yet after your latest commit, and signs each copy. It never rewrites a commit you already have, pushed or not.
@@ -146,12 +150,15 @@ claude                                          # 6. next session, from your lat
 
 `claude --continue` and `claude --resume` resume the previous conversation, with the copy as Claude left it.
 
+> [!IMPORTANT]
+> Review Claude's commits like any contribution before integrating them. Build scripts, `package.json` or CI changes run on your machine or your CI once merged, outside the sandbox.
+
 ## Uninstallation
 
 `./uninstall.sh` changes nothing: it lists what to remove on your machine, with the exact paths and commands. Remove, in this order:
 
 1. **The PATH line** you added to `~/.zshrc` or `~/.bashrc` (`export PATH=".../claude-secure-sandbox/bin:$PATH"`), then open a new shell: `claude` runs Claude Code directly.
-2. **In each repository you used it in**, the `claude` remote and your confirmed removals of protection. Fetch Claude's branches first if you want to keep them; the script lists the ones you never fetched.
+2. **In each repository you used it in**, the `claude` remote and your confirmed removals of protection.
 
    ```bash
    git remote remove claude
@@ -173,6 +180,9 @@ claude                                          # 6. next session, from your lat
 5. **The tool itself**: the `claude-secure-sandbox` directory.
 
 Claude Code itself is not affected.
+
+> [!CAUTION]
+> Deleting the wrapper's state deletes the Claude branches you never fetched. Fetch them first (`git fetch claude`) if you want to keep them; `uninstall.sh` lists them.
 
 ## Documentation
 
