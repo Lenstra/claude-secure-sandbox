@@ -132,7 +132,9 @@ claude                                          # 6. next session, from your lat
 ./uninstall.sh
 ```
 
-The script removes what the tool created outside its own directory: the `claude` remote and the confirmations of removed protections in each repository you used it in, then, after asking, the wrapper's state (Claude's copies, archives, sessions, its copy of your Claude Code login) and its configuration. It first lists Claude's branches you never fetched, since they would be lost. Your repositories and Claude Code itself are left untouched. It does not edit your shell startup file: it tells you which line to remove to take the wrapper off your `PATH`. Then delete the `claude-secure-sandbox` directory.
+The script takes the wrapper off your `PATH`: it removes the line that puts its `bin` directory there from your shell startup files, and keeps a backup of each file it changes. In a new shell, `claude` runs Claude Code directly.
+
+Nothing else is removed. The script prints what is left for you to delete, with the commands: the `claude` remote and the confirmed removals of protection in each repository you used the tool in, the wrapper's state (Claude's copies, archives, sessions, its copy of your Claude Code login), its configuration, and the tool's directory. It also lists Claude's branches you never fetched, so that you can fetch them before deleting the state.
 
 ## Documentation
 

@@ -592,17 +592,15 @@ cat > "$T/fakebin/s-unfetched.sh" <<'EOF'
 git checkout -q -b never-fetched && echo z > src/z.txt && git add src/z.txt && git commit -qm "never fetched"
 EOF
 run_claude "$T/fakebin/s-unfetched.sh"
-echo "export PATH=\"$ROOT/bin:\$PATH\"" > "$T/home/.zshrc"
-printf 'n\n' | "$ROOT/uninstall.sh" > "$T/out/uninstall-refused" 2>&1
-check "unfetched branch reported" grep -q "never-fetched was never fetched" "$T/out/uninstall-refused"
-check "nothing removed when refused" git -C "$D" config --get remote.claude.url
-"$ROOT/uninstall.sh" -y > "$T/out/last" 2>&1
-check "remote claude removed" sh -c "! git -C '$D' config --get remote.claude.url"
-check "confirmations removed from the repository" test ! -e "$D/.git/claude-secure-sandbox"
-check "state deleted" test ! -e "$STATE_ROOT"
-check "configuration deleted" test ! -e "$CLAUDE_SECURE_SANDBOX_CONFIG"
-check "PATH line reported" grep -q "remove line 1 of $T/home/.zshrc" "$T/out/last"
-check "the repository itself untouched" grep -q "SECRET" "$D/secret/s.txt"
+printf 'alias ll="ls -l"\nexport PATH="%s/bin:$PATH"\n' "$ROOT" > "$T/home/.zshrc"
+"$ROOT/uninstall.sh" > "$T/out/last" 2>&1
+check "PATH line removed" sh -c "! grep -q '$ROOT/bin' '$T/home/.zshrc'"
+check "rest of the startup file kept" grep -q 'alias ll' "$T/home/.zshrc"
+check "startup file backed up" sh -c "grep -q '$ROOT/bin' '$T/home/.zshrc'.claude-secure-sandbox-*.bak"
+check "unfetched branch reported" grep -q "never-fetched was never fetched" "$T/out/last"
+check "remote kept, removal command shown" sh -c "git -C '$D' config --get remote.claude.url && grep -q \"remote remove claude\" '$T/out/last'"
+check "state kept, removal command shown" sh -c "test -d '$STATE_ROOT' && grep -q \"rm -rf '$STATE_ROOT'\" '$T/out/last'"
+check "configuration kept" test -f "$CLAUDE_SECURE_SANDBOX_CONFIG"
 
 # --- summary -----------------------------------------------------------------------
 
