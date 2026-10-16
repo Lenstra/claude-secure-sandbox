@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""claude-secure-sandbox: replaces the `claude` command on the PATH."""
+import os
+import sys
+
+if sys.version_info < (3, 9):
+    sys.exit("claude-secure-sandbox: error: Python 3.9 or later is required")
+
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, ROOT)
+
+from claude_secure_sandbox.cli import main  # noqa: E402
+
+sys.exit(main(ROOT, sys.argv[1:]))

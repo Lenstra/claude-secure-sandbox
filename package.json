@@ -1,0 +1,13 @@
+{
+  "name": "claude-secure-sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run Claude Code on a repository that contains sensitive code, without Claude being able to read it",
+  "scripts": {
+    "test": "python3 tests/test_unit.py && bash tests/run-tests.sh",
+    "test:linux": "docker build -q -f tests/linux/Dockerfile -t claude-secure-sandbox-test . && docker run --rm --privileged claude-secure-sandbox-test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.78"
+  }
+}

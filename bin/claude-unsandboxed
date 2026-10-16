@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Runs the real claude binary, without the sandbox."""
+import os
+import sys
+
+if sys.version_info < (3, 9):
+    sys.exit("claude-secure-sandbox: error: Python 3.9 or later is required")
+
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, ROOT)
+
+from claude_secure_sandbox.common import die, find_real_claude, load_config  # noqa: E402
+
+real = find_real_claude(load_config(), ROOT) or die("claude binary not found on the PATH (or set claude_bin)")
+os.execv(real, [real, *sys.argv[1:]])

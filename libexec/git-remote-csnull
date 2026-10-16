@@ -1,0 +1,15 @@
+#!/bin/sh
+# Promisor remote of the filtered copy: it serves no object.
+# Git therefore never fetches hidden content; replace refs show the
+# placeholder instead. Answering "success, nothing to send" keeps
+# git log -p, show and blame from failing on missing contents.
+while IFS= read -r line; do
+  case $line in
+    capabilities) printf 'fetch\n\n' ;;
+    list|list\ *) printf '\n' ;;
+    fetch\ *) ;;
+    '') printf '\n'; exit 0 ;;
+    *) exit 1 ;;
+  esac
+done
+exit 0
