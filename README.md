@@ -73,6 +73,9 @@ System directories (`/usr`, `/lib`, `/etc`, `/opt`, and `/nix/store`, `/snap` or
 
 The real binary stays available as `claude-unsandboxed`, for the rare session that must run without the sandbox.
 
+> [!WARNING]
+> `claude-unsandboxed` runs Claude Code with no protection at all. Claude can then read every protected repository on your machine, its files and its git history, and anything else your user account can read, even when you start it from another directory.
+
 ### Protect a repository
 
 Commit a `.claudeprotected` file at the repository root, one path per line:
