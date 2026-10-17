@@ -119,7 +119,11 @@ If you see neither the screen nor that line, `claude` is not going through the s
 When a script runs Claude for you (for example `claude -p "..."` in a CI job), nobody is there to press Enter, so the screen is skipped and Claude starts right away.
 
 > [!NOTE]
-> Started in your home directory (or `/`), `claude` can read it but cannot write there: programs outside the sandbox run what lives in your home directory. Claude then writes only to its temp directory and gives you the changes to apply. Protected repositories and old Claude transcripts stay hidden, and so do your credentials and temp files when protected code exists on the computer. Start `claude` in a project directory to let Claude edit files.
+> If you run `claude` directly in your home folder (or in `/`), Claude can look at your files but cannot change any of them. It will show you the changes instead, and you apply them yourself.
+>
+> Why: some files in your home folder are run automatically outside the sandbox, such as `.zshrc` when you open a terminal. If Claude could edit them, it could make your computer run commands outside the sandbox.
+>
+> To let Claude edit files, run `claude` in a project folder instead.
 
 The real binary stays available as `claude-unsandboxed`, for the rare session that must run without the sandbox.
 
