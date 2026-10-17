@@ -318,6 +318,7 @@ MCP servers live in `~/.claude.json`, which is Claude Code's state rather than c
 | `PATH` | `libexec/` and `run/bin/` prepended | `git-remote-csnull`, and the direct `git` link. |
 | `TMPDIR`, `CLAUDE_CODE_TMPDIR` | `tmp/` | Per-repository temp directory. `srt` forces `/tmp/claude`, shared by every sandbox, and Claude Code's own temp root is `/tmp`, which is hidden when protected code exists. |
 | `DISABLE_AUTOUPDATER` | `1` | No update from inside the sandbox. |
+| `CLAUDE_CODE_SYNC_PLUGINS` | `1` | Loads the plugins and skills synced from claude.ai: Claude Code turns their sync off when it runs with a configuration directory other than `~/.claude`. |
 | `CLAUDE_SECURE_SANDBOX_ACTIVE` | `1` | A nested `claude` runs without a new sandbox. |
 | `SSH_AUTH_SOCK`, `GIT_ASKPASS`, `SSH_ASKPASS` | unset | No SSH agent and no credential prompt. |
 

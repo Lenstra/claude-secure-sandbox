@@ -353,6 +353,9 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
         # Claude Code's own temp root, /tmp by default, which is unreadable.
         "CLAUDE_CODE_TMPDIR": ctx.tmp,
         "DISABLE_AUTOUPDATER": "1",
+        # Plugins and skills synced from claude.ai: Claude Code turns their
+        # sync off with a configuration directory of its own, unless asked.
+        "CLAUDE_CODE_SYNC_PLUGINS": "1",
         "CLAUDE_SECURE_SANDBOX_ACTIVE": "1",
     })
     for var in ("SSH_AUTH_SOCK", "GIT_ASKPASS", "SSH_ASKPASS"):
