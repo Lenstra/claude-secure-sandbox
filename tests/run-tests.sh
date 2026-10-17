@@ -36,10 +36,13 @@ echo "FAKE-SSH-KEY" > "$T/home/.ssh/id_test"
 echo '{"theme":"dark"}' > "$T/home/.claude/settings.json"
 mkdir -p "$T/home/.claude/skills/demo" "$T/home/.claude/projects/-old-session"
 echo "demo skill" > "$T/home/.claude/skills/demo/SKILL.md"
+mkdir -p "$T/home/.claude/plugins/marketplaces/demo" "$T/home/.claude/plugins/synced/org"
+echo '{}' > "$T/home/.claude/plugins/marketplaces/demo/marketplace.json"
+echo '{"plugins":[]}' > "$T/home/.claude/plugins/synced/org/manifest.json"
 echo "OLD-TRANSCRIPT-WITH-PROTECTED-CODE" > "$T/home/.claude/projects/-old-session/t.jsonl"
 cat > "$T/home/.claude.json" <<EOF
-{"mcpServers":{"demo":{"command":"true"}},"oauthAccount":{"emailAddress":"dev@example.com"},
- "projects":{"$T/repo":{"mcpServers":{"repo-mcp":{"command":"true"}}},"/other/project":{"mcpServers":{"other-mcp":{"command":"true"}}}}}
+{"mcpServers":{"demo":{"command":"true"}},"oauthAccount":{"emailAddress":"dev@example.com"},"hasCompletedOnboarding":true,
+ "projects":{"$T/repo":{"mcpServers":{"repo-mcp":{"command":"true"}},"hasTrustDialogAccepted":true},"/other/project":{"mcpServers":{"other-mcp":{"command":"true"}}}}}
 EOF
 echo '{"token":"FAKE-JSON-SECRET"}' > "$T/secret.json"
 printf '[user]\n\tname = Dev\n\temail = dev@example.com\n[init]\n\tdefaultBranch = main\n' > "$T/home/.gitconfig"
@@ -133,7 +136,6 @@ git -C "$D" config gpg.ssh.allowedSignersFile "$T/allowed_signers"
 if [ "$OS" = Darwin ]; then USER_TMP=$(getconf DARWIN_USER_TEMP_DIR); else USER_TMP=/var/tmp/; fi
 PROBE_TMP=$(mktemp /tmp/cs-probe.XXXXXX); echo "PROBE" > "$PROBE_TMP"
 PROBE_USER_TMP=$(mktemp "${USER_TMP}cs-probe.XXXXXX"); echo "PROBE" > "$PROBE_USER_TMP"
-trap 'rm -f "$PROBE_TMP" "$PROBE_USER_TMP"' EXIT
 
 COPY=$STATE_ROOT/repo-$(python3 -c 'import hashlib, sys; print(hashlib.sha1(sys.argv[1].encode()).hexdigest()[:10])' "$D")
 
@@ -170,6 +172,8 @@ name="Claude settings passed through";                 t grep -q dark "\$CLAUDE_
 name="skills passed through";                          t grep -q "demo skill" "\$CLAUDE_CONFIG_DIR/skills/demo/SKILL.md"
 name="~/.claude settings are not writable";            tn sh -c 'echo x >> "\$CLAUDE_CONFIG_DIR/settings.json"'
 name="~/.claude skills are not writable";              tn sh -c 'echo x > "\$CLAUDE_CONFIG_DIR/skills/demo/new.md"'
+name="installed plugins are not writable";             tn sh -c 'echo x > "\$CLAUDE_CONFIG_DIR/plugins/marketplaces/demo/new.json"'
+name="synced plugins are the sandbox's own, writable";  t sh -c 'echo x >> "\$CLAUDE_CONFIG_DIR/plugins/synced/org/manifest.json"'
 name="reading /tmp is blocked";                        tn cat "$PROBE_TMP"
 name="reading the user's temp dir is blocked";         tn cat "$PROBE_USER_TMP"
 name="another folder of the computer is readable";    t ls /usr/share
@@ -255,6 +259,9 @@ check "lock released" test ! -d "$COPY/state/lock"
 check "sessions separate from ~/.claude" test -f "$STATE_ROOT/claude-home/settings.json"
 check "settings passed through, not copied" test -L "$STATE_ROOT/claude-home/settings.json"
 check "~/.claude untouched by the session" sh -c "! grep -q x '$T/home/.claude/settings.json' && test ! -e '$T/home/.claude/skills/demo/new.md'"
+check "plugins passed through, except the synced ones" sh -c "test -L '$STATE_ROOT/claude-home/plugins/marketplaces' && test ! -L '$STATE_ROOT/claude-home/plugins/synced'"
+check "~/.claude/plugins untouched by the session" sh -c "! grep -q x '$T/home/.claude/plugins/synced/org/manifest.json' && test ! -e '$T/home/.claude/plugins/marketplaces/demo/new.json'"
+check "onboarding and trust carried over" sh -c "jq -e --arg w '$COPY/work' '.hasCompletedOnboarding and .projects[\$w].hasTrustDialogAccepted' '$STATE_ROOT/claude-home/.claude.json'"
 check "mcpServers synced" sh -c "jq -e '.mcpServers.demo' '$STATE_ROOT/claude-home/.claude.json'"
 check "this repository's MCP servers synced" sh -c "jq -e --arg w '$COPY/work' '.projects[\$w].mcpServers[\"repo-mcp\"]' '$STATE_ROOT/claude-home/.claude.json'"
 check_not "other projects and account not copied" sh -c "grep -q 'other-mcp\|dev@example.com\|/other/project' '$STATE_ROOT/claude-home/.claude.json'"

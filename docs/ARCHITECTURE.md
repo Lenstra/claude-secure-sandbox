@@ -306,6 +306,8 @@ Claude Code stores transcripts in `~/.claude/projects/` and file backups in `fil
 
 The configuration is passed through, read only. At each launch, each item of the `sync` list (`settings.json`, `CLAUDE.md`, `agents/`, `commands/`, `skills/`, `plugins/` by default) becomes a link in `claude-home` to the original in `~/.claude`, which stays readable from the sandbox (re-allowed if it lies inside a hidden area). Claude Code uses the developer's configuration as it is; Claude's own sandbox is disabled on the command line (`--settings`). Nothing in `~/.claude` is writable: Claude could otherwise add a hook, a skill or an MCP server that the developer's Claude would run outside the sandbox. Items that hold transcripts, history or credentials (`projects`, `file-history`, `history.jsonl`, `todos`, `shell-snapshots`, `sessions`, `.credentials.json`...) are never passed through, even when listed in `sync`, and are hidden from the sandbox; an item whose real path leads into the repository, the wrapper's state or `~/.ssh` is skipped.
 
+`plugins/` is a directory of links rather than one link: Claude Code rewrites `plugins/synced` and `plugins/store` itself when it syncs the plugins of claude.ai (`CLAUDE_CODE_SYNC_PLUGINS`, below). The sandbox keeps its own copy of these two, made from the originals the first time and then kept up to date by Claude Code in the sandbox; every other entry (`marketplaces`, installed plugins) is a read-only link. A plugin written there runs only in the sandbox.
+
 MCP servers live in `~/.claude.json`, which is Claude Code's state rather than configuration: the account, every project's paths, sessions and costs, caches, all rewritten constantly. It is neither passed through nor copied; the wrapper copies only the MCP servers into the sandbox's own `.claude.json`: the global ones, and those registered for this repository (`claude mcp add`, local scope), attached to the directory Claude works in, with the trust given to this repository. It also copies the onboarding already done outside (`hasCompletedOnboarding`, `lastOnboardingVersion`, `theme`), so that Claude Code does not ask again for a theme and a login method. Files the wrapper writes into `claude-home` replace the entry rather than writing through it, files it reads there must be regular files, and its own temp files live in `state/tmp`, out of the sandbox's reach.
 
 ### Network
@@ -659,6 +661,7 @@ claude_secure_sandbox/claude_config.py      configuration passthrough, MCP serve
 claude_secure_sandbox/screen.py             start screen, session label, protected_code_exists
 claude_secure_sandbox/sandbox.py            srt settings (read denylist), git configuration, tool links, system prompt, launch
 libexec/git-remote-csnull                   promisor remote that serves no object
+libexec/srt-own-terminal.mjs                loaded into srt on macOS: terminal control on Claude's own terminal only
 share/prompts/protected-mode.md             prompt for protected mode
 share/prompts/directory-mode.md             prompt for directory mode
 share/config.example.json                   configuration example
@@ -673,13 +676,14 @@ Run the tests with `npm test` (`jq` is needed by the end-to-end suite), and on L
 
 - reads through the denylist: the developer repository, `~/.ssh` and the signing key, old transcripts in `~/.claude`, the wrapper state, `/tmp` and the user's temp directory hidden, the rest of the computer readable; credentials hidden when protected code exists; a locked `.git`, and network filtering;
 - escape attempts: `launchctl`, `crontab`, `at`, `open`, Apple Events, clipboard, Unix sockets, localhost, `~/.zshrc`, LaunchAgents, the `xcrun` cache, and a detached process outliving the session;
+- on macOS, in a real terminal: raw mode on Claude's terminal, another terminal of the user that cannot be opened, and the narrowing script refusing an unexpected terminal;
 - no protected content in objects or on disk, including moved files, identical copies and branches merged with `-s ours`; placeholders; absent public files reported once;
 - `git fetch claude` and `git pull`, a commit referencing hidden content, signing by the developer's rebase;
 - the branch choice at a new session (Claude ahead, integrated after a rebase, diverged with each answer), the developer's other branches (kept, updated, deleted), resume;
 - removed protections (no terminal, refused, confirmed, protected again), `.claudeprotected` additions, tampering with `.git`, planted links;
 - directory mode, with the protected repository elsewhere hidden and named on the start screen; a protected repository below the launch directory hidden and not written; the home directory readable but not writable, with credentials, protected repositories, old transcripts and the wrapper's state hidden there; a launch from `/`, read only, with protected repositories hidden;
 - the machine scan finding protected repositories, including one never opened with the wrapper, and skipping the wrapper's copies;
-- Claude Code's login and temp root, the configuration passed through read only and the MCP servers copied, launch cases, refused configurations, and `filesystem.allow_read` ignored with a warning;
+- Claude Code's login and temp root, the configuration passed through read only, the synced plugins the sandbox's own, the MCP servers, onboarding and trust copied, launch cases, refused configurations, and `filesystem.allow_read` ignored with a warning;
 - `uninstall.sh`: nothing changed, the PATH line located, unfetched branches reported, the removal commands of the remote, the state and the configuration shown.
 
-Tested on macOS 27 (git 2.50, Claude Code 2.1.286) and Debian 12 in Docker on arm64 (Claude Code 2.1.301 started in the sandbox), with srt 0.0.78.
+Tested on macOS 27 (git 2.50, Claude Code 2.1.286) and Debian 12 in Docker on arm64 (Claude Code 2.1.302 started in the sandbox, its interface driven in a terminal), with srt 0.0.78.

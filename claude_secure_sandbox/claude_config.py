@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import shlex
+import shutil
 import subprocess
 
 from .common import (ensure_real_dir, install_file, install_json, load_json, overlaps, path_within, realpath,
@@ -46,16 +47,19 @@ def sync_claude_config(ctx: Context) -> None:
             warn(f"sync item ignored (link in {dst}): {item}")
             continue
         try:
-            remove_entry(target)
             source = os.path.join(src, item)
-            if not os.path.exists(source):
-                continue
-            real = realpath(source)
-            if any(overlaps(real, s) for s in sensitive if s):
+            real = realpath(source) if os.path.exists(source) else ""
+            if real and any(overlaps(real, s) for s in sensitive if s):
                 warn(f"sync item ignored (it leads to {real}): {item}")
-                continue
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            os.symlink(source, target)
+                real = ""
+            if item == "plugins" and real and os.path.isdir(real):
+                pass_plugins_through(source, target)
+            else:
+                remove_entry(target)
+                if not real:
+                    continue
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                os.symlink(source, target)
             ctx.config_read.append(real)
         except OSError:
             warn(f"cannot pass ~/.claude/{item} through")
@@ -89,6 +93,36 @@ def sync_claude_config(ctx: Context) -> None:
             entry["hasTrustDialogAccepted"] = True
         data["projects"][ctx.work] = entry
         install_json(data, target, ctx.wtmp)
+
+
+# Entries of ~/.claude/plugins that Claude Code rewrites itself when it syncs
+# the plugins of claude.ai: the sandbox keeps its own copy of them.
+OWN_PLUGIN_ITEMS = {"synced", "store"}
+
+
+def pass_plugins_through(source: str, target: str) -> None:
+    """~/.claude/plugins in the sandbox: a directory of read-only links to its
+    entries, except OWN_PLUGIN_ITEMS, copied from the original the first time
+    and then kept up to date by Claude Code in the sandbox. A plugin Claude
+    writes there runs only in the sandbox."""
+    if os.path.islink(target) or not os.path.isdir(target):
+        remove_entry(target)
+        os.makedirs(target)
+    names = set(os.listdir(source))
+    for name in os.listdir(target):
+        if name not in names and os.path.islink(os.path.join(target, name)):
+            os.unlink(os.path.join(target, name))
+    for name in sorted(names):
+        original, entry = os.path.join(source, name), os.path.join(target, name)
+        if name not in OWN_PLUGIN_ITEMS:
+            remove_entry(entry)
+            os.symlink(original, entry)
+        elif os.path.islink(entry) or not os.path.lexists(entry):
+            remove_entry(entry)
+            if os.path.isdir(original):
+                shutil.copytree(original, entry, symlinks=True)
+            else:
+                shutil.copy2(original, entry, follow_symlinks=False)
 
 
 ONBOARDING_KEYS = ("hasCompletedOnboarding", "lastOnboardingVersion", "theme")
