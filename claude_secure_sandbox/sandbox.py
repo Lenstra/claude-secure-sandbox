@@ -587,16 +587,57 @@ def claude_settings(ctx: Context) -> str:
     return json.dumps(settings, ensure_ascii=False)
 
 
-def print_banner(ctx: Context) -> None:
-    """Marks the start of a sandboxed session in the terminal."""
-    if not sys.stderr.isatty():
-        return
-    where = "this directory" if ctx.directory_mode else "this filtered copy"
-    lines = [f"\033[1;32m🔒 {NAME}: sandboxed session\033[0m", f"   {_session_label(ctx)}"]
+def confirm_session(ctx: Context) -> bool:
+    """In a terminal, says which mode starts and why, then waits for Enter.
+    Returns False if the developer cancels."""
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        return True
+    green, bold, reset = "\033[1;32m", "\033[1m", "\033[0m"
     if not ctx.directory_mode:
-        lines.append(f"   {len(ctx.protected)} protected path(s) absent from the copy")
-    lines.append(f"   Claude reads {where}, the system and installed tools; nothing else of yours")
-    print("\n".join(lines) + "\n", file=sys.stderr, flush=True)
+        branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
+        title = "protected mode"
+        lines = [
+            f"Why:    {PROTECT_FILE} found at the root of {ctx.dev_root}",
+            f"Claude: works in a filtered copy of the repository, on {branch};",
+            f"        {len(ctx.protected)} protected path(s) are absent from it, in files and in git history",
+            "Reads:  that copy, the system and installed tools; nothing else of yours",
+            "Then:   git fetch claude, to get its commits",
+        ]
+    elif ctx.read_only_root:
+        title = "directory mode, read only"
+        lines = [
+            f"Why:    no {PROTECT_FILE} under {ctx.work}, which holds your home directory",
+            f"Claude: reads all of {ctx.work}, SSH keys and keychain included,",
+            "        but writes only to its temp directory: programs outside the sandbox run",
+            "        what lives in your home directory",
+            "Hidden: old Claude transcripts, and protected repositories elsewhere",
+        ]
+    else:
+        title = "directory mode"
+        lines = [
+            f"Why:    no {PROTECT_FILE} in {ctx.work}",
+            f"Claude: works directly in {ctx.work}, and can read and write it",
+            "Reads:  that directory, the system and installed tools; nothing else of yours",
+        ]
+    prompt = "Press Enter to start Claude, or Ctrl-C to cancel: "
+    texts = ["", f"🔒 {NAME}: {title}"] + [f"   {line}" for line in lines] + ["", prompt]
+    print(f"\n{green}🔒 {NAME}: {title}{reset}", file=sys.stderr)
+    for line in lines:
+        print(f"   {line}", file=sys.stderr)
+    print(f"\n{bold}{prompt}{reset}", end="", file=sys.stderr, flush=True)
+    try:
+        started = bool(sys.stdin.readline())
+    except KeyboardInterrupt:
+        print(file=sys.stderr)
+        return False
+    if started:
+        # Erase the screen before Claude takes the terminal: up as many rows
+        # as were printed (long lines wrap), then clear to the end.
+        columns = max(shutil.get_terminal_size().columns, 1)
+        widths = [len(t) + t.count("🔒") for t in texts]  # the emoji takes two cells
+        rows = sum(max(1, -(-w // columns)) for w in widths)
+        print(f"\033[{rows}A\r\033[J", end="", file=sys.stderr, flush=True)
+    return started
 
 
 def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
@@ -629,7 +670,9 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
     # Ctrl-C goes to Claude; the wrapper must survive to print the end of
     # session summary. A handler (unlike an ignored signal) is reset in child
     # processes.
+    if not confirm_session(ctx):
+        log("cancelled")
+        return 130
     signal.signal(signal.SIGINT, lambda *_: None)
-    print_banner(ctx)
     status = subprocess.call(cmd, cwd=cwd, env=env)
     return 128 - status if status < 0 else status

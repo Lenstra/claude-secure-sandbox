@@ -145,10 +145,10 @@ run_claude() { # scenario, args...
 run_claude_answer() { # answer, scenario, args...
   local answer=$1 scenario=$2; shift 2
   if [ "$OS" = Darwin ]; then
-    ( cd "$D" && { printf '%s\n' "$answer"; sleep 3; } |
+    ( cd "$D" && { printf '%s\n\n' "$answer"; sleep 3; } |
         CS_TEST_SCENARIO=$scenario script -q /dev/null claude "$@" ) > "$T/out/last" 2>&1
   else
-    ( cd "$D" && { printf '%s\n' "$answer"; sleep 3; } |
+    ( cd "$D" && { printf '%s\n\n' "$answer"; sleep 3; } |
         CS_TEST_SCENARIO=$scenario script -q -e -c "claude $*" /dev/null ) > "$T/out/last" 2>&1
   fi
 }
@@ -353,7 +353,14 @@ check "choice 2: quit to integrate first" grep -q "integrate Claude's commits (g
 check_not "choice 2: claude not started" grep -q '^SANDBOXED' "$T/out/last"
 run_claude_answer 1 "$T/fakebin/s-dev.sh"
 check "choice 1: backup announced" grep -q "Claude's main kept: git fetch claude refs/backup/" "$T/out/last"
-check "banner in a terminal" grep -q "claude-secure-sandbox: sandboxed session" "$T/out/last"
+check "mode screen in a terminal" grep -q "claude-secure-sandbox: protected mode" "$T/out/last"
+check "mode screen says why" grep -q "Why:    .claudeprotected found at the root of $D" "$T/out/last"
+if [ "$OS" = Darwin ]; then
+  ( cd "$D" && sleep 3 | CS_TEST_SCENARIO=$T/fakebin/s-dev.sh script -q /dev/null claude ) > "$T/out/cancel" 2>&1
+else
+  ( cd "$D" && sleep 3 | CS_TEST_SCENARIO=$T/fakebin/s-dev.sh script -q -e -c claude /dev/null ) > "$T/out/cancel" 2>&1
+fi
+check "no Enter: Claude not started" sh -c "grep -q cancelled '$T/out/cancel' && ! grep -q '^SANDBOXED' '$T/out/cancel'"
 collect
 ref=$(sed -n "s/.*git fetch claude \(refs\/backup\/[^ ]*\).*/\1/p" "$T/out/last" | tr -d '\r' | head -1)
 check "choice 1: Claude's commit retrievable" sh -c "git -C '$D' fetch -q claude '$ref' && git -C '$D' cat-file -e FETCH_HEAD:src/d.txt"
