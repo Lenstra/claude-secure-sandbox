@@ -94,20 +94,25 @@ System directories (`/usr`, `/lib`, `/etc`, `/opt`, and `/nix/store`, `/snap` or
 
 ## Usage
 
-Every `claude` session runs in the sandbox, and shows it. Before Claude starts, a screen says which mode starts and why, and what Claude can read and write; press Enter to start, or Ctrl-C to cancel:
+Every `claude` session runs in the sandbox, and shows it. Before Claude starts, a screen says why this mode, what Claude will not see and what happens to your files; press Enter to start, or Ctrl-C to cancel:
 
 ```
-🔒 claude-secure-sandbox: protected mode
-   Why:    .claudeprotected found at the root of /path/to/my-repo
-   Claude: works in a filtered copy of the repository, on feature-x;
-           2 protected path(s) are absent from it, in files and in git history
-   Reads:  that copy, the system and installed tools; nothing else of yours
-   Then:   git fetch claude, to get its commits
+🔒 claude-secure-sandbox
+
+This repository is protected: it has a .claudeprotected file.
+
+   Hidden from Claude:  core/engine, licensing/keys.go
+   Claude works on:     a copy of this repository, branch feature-x
+   Your files:          untouched; get Claude's commits with: git fetch claude
 
 Press Enter to start Claude, or Ctrl-C to cancel:
 ```
 
-During the session, the Claude Code status line reads `🔒 sandboxed · protected repository my-repo · feature-x` (unless you configured your own status line). If you see neither, `claude` is not the wrapper: check your `PATH`. The screen only waits in a terminal: `claude -p` in a script starts at once.
+While Claude runs, the bottom line of Claude Code shows `🔒 sandboxed · protected repository my-repo · feature-x` (unless you already set your own status line).
+
+If you see neither the screen nor that line, `claude` is not going through the sandbox: check your `PATH`.
+
+When a script runs Claude for you (for example `claude -p "..."` in a CI job), nobody is there to press Enter, so the screen is skipped and Claude starts right away.
 
 > [!NOTE]
 > Started in your home directory (or `/`) with no protected repository below, `claude` can read all of it, SSH keys and keychain included, but cannot write there: programs outside the sandbox run what lives in your home directory. Claude then writes only to its temp directory and gives you the changes to apply. Old Claude transcripts stay unreadable. Start `claude` in a project directory to let Claude edit files.

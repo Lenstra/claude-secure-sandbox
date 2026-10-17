@@ -353,8 +353,8 @@ check "choice 2: quit to integrate first" grep -q "integrate Claude's commits (g
 check_not "choice 2: claude not started" grep -q '^SANDBOXED' "$T/out/last"
 run_claude_answer 1 "$T/fakebin/s-dev.sh"
 check "choice 1: backup announced" grep -q "Claude's main kept: git fetch claude refs/backup/" "$T/out/last"
-check "mode screen in a terminal" grep -q "claude-secure-sandbox: protected mode" "$T/out/last"
-check "mode screen says why" grep -q "Why:    .claudeprotected found at the root of $D" "$T/out/last"
+check "start screen says why" grep -q "This repository is protected: it has a .claudeprotected file." "$T/out/last"
+check "start screen lists what is hidden" grep -q "Hidden from Claude:  lib/deep/core, secret" "$T/out/last"
 if [ "$OS" = Darwin ]; then
   ( cd "$D" && sleep 3 | CS_TEST_SCENARIO=$T/fakebin/s-dev.sh script -q /dev/null claude ) > "$T/out/cancel" 2>&1
 else

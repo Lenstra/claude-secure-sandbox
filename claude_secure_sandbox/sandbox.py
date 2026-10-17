@@ -595,36 +595,35 @@ def confirm_session(ctx: Context) -> bool:
     green, bold, reset = "\033[1;32m", "\033[1m", "\033[0m"
     if not ctx.directory_mode:
         branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
-        title = "protected mode"
+        hidden = ", ".join(ctx.protected[:5]) + (f" and {len(ctx.protected) - 5} more"
+                                                 if len(ctx.protected) > 5 else "")
+        intro = f"This repository is protected: it has a {PROTECT_FILE} file."
         lines = [
-            f"Why:    {PROTECT_FILE} found at the root of {ctx.dev_root}",
-            f"Claude: works in a filtered copy of the repository, on {branch};",
-            f"        {len(ctx.protected)} protected path(s) are absent from it, in files and in git history",
-            "Reads:  that copy, the system and installed tools; nothing else of yours",
-            "Then:   git fetch claude, to get its commits",
+            f"Hidden from Claude:  {hidden}",
+            f"Claude works on:     a copy of this repository, branch {branch}",
+            "Your files:          untouched; get Claude's commits with: git fetch claude",
         ]
     elif ctx.read_only_root:
-        title = "directory mode, read only"
+        intro = f"You started Claude in {ctx.work}, which holds your home folder. Nothing in it is protected."
         lines = [
-            f"Why:    no {PROTECT_FILE} under {ctx.work}, which holds your home directory",
-            f"Claude: reads all of {ctx.work}, SSH keys and keychain included,",
-            "        but writes only to its temp directory: programs outside the sandbox run",
-            "        what lives in your home directory",
-            "Hidden: old Claude transcripts, and protected repositories elsewhere",
+            "Claude can read:     everything in it, including SSH keys and keychain",
+            "Claude can edit:     nothing there; it will tell you the changes to make",
+            "Hidden from Claude:  your old Claude conversations, protected projects elsewhere",
         ]
     else:
-        title = "directory mode"
+        intro = f"No {PROTECT_FILE} here: Claude works directly in this folder."
         lines = [
-            f"Why:    no {PROTECT_FILE} in {ctx.work}",
-            f"Claude: works directly in {ctx.work}, and can read and write it",
-            "Reads:  that directory, the system and installed tools; nothing else of yours",
+            f"Claude can edit:     {ctx.work}",
+            "Hidden from Claude:  the rest of your computer: protected repositories, your home folder,",
+            "                     other projects, SSH keys",
         ]
+    title = NAME
     prompt = "Press Enter to start Claude, or Ctrl-C to cancel: "
-    texts = ["", f"🔒 {NAME}: {title}"] + [f"   {line}" for line in lines] + ["", prompt]
-    print(f"\n{green}🔒 {NAME}: {title}{reset}", file=sys.stderr)
+    texts = ["", f"🔒 {title}", "", intro, ""] + [f"   {line}" for line in lines] + ["", prompt]
+    print(f"\n{green}🔒 {title}{reset}\n\n{bold}{intro}{reset}\n", file=sys.stderr)
     for line in lines:
         print(f"   {line}", file=sys.stderr)
-    print(f"\n{bold}{prompt}{reset}", end="", file=sys.stderr, flush=True)
+    print(f"\n{prompt}", end="", file=sys.stderr, flush=True)
     try:
         started = bool(sys.stdin.readline())
     except KeyboardInterrupt:
