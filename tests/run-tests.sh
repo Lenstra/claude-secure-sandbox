@@ -57,7 +57,7 @@ unset CLAUDE_SECURE_SANDBOX_ACTIVE CLAUDE_CONFIG_DIR ZDOTDIR XDG_CONFIG_HOME
 STATE_ROOT=$CLAUDE_SECURE_SANDBOX_HOME
 
 cat > "$T/config.json" <<EOF
-{ "claude_bin": "$T/fakebin/claude" }
+{ "claude_bin": "$T/fakebin/claude", "machine_scan": false }
 EOF
 
 # Fake claude: outside the sandbox it says so; inside it runs the scenario
@@ -172,14 +172,13 @@ name="~/.claude settings are not writable";            tn sh -c 'echo x >> "\$CL
 name="~/.claude skills are not writable";              tn sh -c 'echo x > "\$CLAUDE_CONFIG_DIR/skills/demo/new.md"'
 name="reading /tmp is blocked";                        tn cat "$PROBE_TMP"
 name="reading the user's temp dir is blocked";         tn cat "$PROBE_USER_TMP"
-name="listing /var/log is blocked";                    tn ls /var/log
-name="Homebrew data is unreadable";                    tn ls /opt/homebrew/var
-name="the xcrun cache is not writable";                tn sh -c ': >> "${USER_TMP}xcrun_db"'
+name="another folder of the computer is readable";    t ls /usr/share
+[ "\$(uname)" = Darwin ] && { name="the xcrun cache is not writable"; tn sh -c ': >> "${USER_TMP}xcrun_db"'; }
 name="system files are readable";                      t cat /etc/hosts
 name="git works";                                      t git --version
 name="Claude Code's login is readable";                t grep -q FAKE-OAUTH-1 "\$CLAUDE_CONFIG_DIR/.credentials.json"
 name="Claude Code's temp root is the session's";       t sh -c '[ "\$CLAUDE_CODE_TMPDIR" = "\${TMPDIR%/}" ]'
-name="reading the wrapper state is blocked";           tn ls "$COPY/state"
+name="reading the wrapper state is blocked";           tn cat "$COPY/state/protected-blobs"
 name="writing .git/config is blocked";                 tn sh -c 'echo x >> .git/config'
 name="writing .git/hooks is blocked";                  tn sh -c 'echo x > .git/hooks/post-checkout'
 name="writing alternates is blocked";                  tn sh -c 'echo /x > .git/objects/info/alternates'
@@ -530,8 +529,14 @@ section "launch cases"
 mkdir -p "$T/plain/sub/protected"
 git init -q "$T/plain/sub/protected"
 echo "x" > "$T/plain/sub/protected/$PF"
-out=$(cd "$T/plain" && claude 2>&1)
-check "refused when a protection file is further down" sh -c "printf '%s' '$out' | grep -q 'protected code in $T/plain/sub/protected: run claude from that directory'"
+cat > "$T/fakebin/s-below.sh" <<EOF
+if cat "$T/plain/sub/protected/$PF" >/dev/null 2>&1; then echo "IN-FAIL a protected repository below is hidden"; else echo "IN-OK a protected repository below is hidden"; fi
+echo x > "$T/plain/sub/protected/new" 2>/dev/null
+EOF
+( cd "$T/plain" && CS_TEST_SCENARIO=$T/fakebin/s-below.sh claude ) < /dev/null > "$T/out/last" 2>&1
+check "protected repository below the launch directory: session started" grep -q "^SANDBOXED cwd=$T/plain" "$T/out/last"
+collect
+check "a protected repository below is not written" test ! -e "$T/plain/sub/protected/new"
 
 section "directory mode: no .claudeprotected, only the directory is readable"
 F=$T/plain/free
@@ -561,6 +566,17 @@ else
   ( cd "$F" && sleep 3 | script -q -e -c claude /dev/null ) > "$T/out/screen" 2>&1
 fi
 check "directory mode screen names the protected repository elsewhere" grep -q "Protected, hidden:   $D" "$T/out/screen"
+mkdir -p "$T/home/never-opened" && echo "core" > "$T/home/never-opened/.claudeprotected"
+python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from claude_secure_sandbox.scan import scan; print("\n".join(scan(sys.argv[2], [sys.argv[3]])))' \
+  "$ROOT" "$STATE_ROOT" "$T" > "$T/out/scan"
+check "machine scan finds the protected repositories" sh -c "grep -qx '$D' '$T/out/scan' && grep -qx '$T/home/never-opened' '$T/out/scan'"
+check_not "machine scan skips the wrapper's copies" grep -q "$STATE_ROOT" "$T/out/scan"
+if [ "$OS" = Darwin ]; then
+  ( cd "$F" && sleep 3 | script -q /dev/null claude ) > "$T/out/screen" 2>&1
+else
+  ( cd "$F" && sleep 3 | script -q -e -c claude /dev/null ) > "$T/out/screen" 2>&1
+fi
+check "screen names a protected repository found at launch, never opened" grep -q "Protected, hidden:.*~/never-opened" "$T/out/screen"
 cat > "$T/fakebin/s-nogit.sh" <<'EOF'
 if cat loose.txt >/dev/null 2>&1; then echo "IN-OK outside a repository: the directory is readable"; else echo "IN-FAIL outside a repository: the directory is readable"; fi
 EOF
@@ -568,12 +584,15 @@ EOF
 check "directory without a repository: sandboxed" grep -q "^SANDBOXED cwd=$T/plain/nogit" "$T/out/last"
 collect
 
-section "home directory without protected code: readable, not writable"
+section "home directory: readable, not writable"
+echo "note" > "$T/home/notes.txt"
 HOME_RUN=$STATE_ROOT/home-$(python3 -c 'import hashlib, sys; print(hashlib.sha1(sys.argv[1].encode()).hexdigest()[:10])' "$T/home")/run
 cat > "$T/fakebin/s-home.sh" <<EOF
 t()  { if "\$@" >/dev/null 2>&1; then echo "IN-OK \$name"; else echo "IN-FAIL \$name"; fi; }
 tn() { if "\$@" >/dev/null 2>&1; then echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi; }
-name="home: the whole home directory is readable";        t cat "$T/home/.ssh/id_test"
+name="home: the home directory is readable";              t cat "$T/home/notes.txt"
+name="home: credentials hidden, protected code exists";   tn cat "$T/home/.ssh/id_test"
+name="home: a protected repository in it is hidden";      tn cat "$T/home/never-opened/.claudeprotected"
 name="home: old Claude transcripts stay unreadable";       tn cat "$T/home/.claude/projects/-old-session/t.jsonl"
 name="home: other repositories' copies stay unreadable";   tn ls "$COPY/state"
 name="home: Claude's configuration is readable";           t ls "\$CLAUDE_CONFIG_DIR"
@@ -589,8 +608,13 @@ check "home: sandboxed in the home directory" grep -q "^SANDBOXED cwd=$T/home" "
 collect
 check "home: nothing written in the home directory" test ! -e "$T/home/written-by-claude"
 check "home: status line says read only" grep -q -- '(read only)' "$T/out/last"
-( cd / && claude ) < /dev/null > "$T/out/root" 2>&1
-check "from /, a protected repository below is found and refused" grep -q "protected code in .*: run claude from that directory" "$T/out/root"
+cat > "$T/fakebin/s-root.sh" <<EOF
+if cat "$D/src/a.txt" >/dev/null 2>&1; then echo "IN-FAIL from /: protected repositories hidden"; else echo "IN-OK from /: protected repositories hidden"; fi
+if echo x > "$T/plain/written-from-root" 2>/dev/null; then echo "IN-FAIL from /: nothing writable"; else echo "IN-OK from /: nothing writable"; fi
+EOF
+( cd / && CS_TEST_SCENARIO=$T/fakebin/s-root.sh claude ) < /dev/null > "$T/out/last" 2>&1
+check "from /: session started, read only" grep -q -- "^SANDBOXED cwd=/$" "$T/out/last"
+collect
 out=$(cd "$D" && claude --version 2>&1)
 check "--version without sandbox" sh -c "printf '%s' '$out' | grep -q '^UNSANDBOXED --version'"
 out=$(cd "$D/secret" && claude 2>&1)
@@ -610,22 +634,22 @@ check "one session per repository" sh -c "printf '%s' '$out' | grep -q 'already 
 kill $sleeper 2>/dev/null; wait $sleeper 2>/dev/null
 rm -rf "$COPY/state/lock"
 cat > "$T/config.json" <<EOF
-{ "claude_bin": "$T/fakebin/claude", "network": { "allowed_domains": ["github.com"] } }
+{ "claude_bin": "$T/fakebin/claude", "machine_scan": false, "network": { "allowed_domains": ["github.com"] } }
 EOF
 out=$(cd "$D" && claude 2>&1)
 check "git host refused in the configuration" sh -c "printf '%s' '$out' | grep -q 'git host not allowed'"
 check_not "claude not started when the configuration is refused" sh -c "printf '%s' '$out' | grep -q '^SANDBOXED'"
 cat > "$T/config.json" <<EOF
-{ "claude_bin": "$T/fakebin/claude", "filesystem": { "allow_read": ["~/.ssh/known_hosts"] } }
+{ "claude_bin": "$T/fakebin/claude", "machine_scan": false, "filesystem": { "allow_read": ["~/.ssh/known_hosts"] } }
 EOF
-out=$(cd "$D" && claude 2>&1)
-check "allow_read inside ~/.ssh refused" sh -c "printf '%s' '$out' | grep -q 'conflicts with $T/home/.ssh'"
-check_not "claude not started (allow_read refused)" sh -c "printf '%s' '$out' | grep -q '^SANDBOXED'"
+( cd "$D" && claude ) < /dev/null > "$T/out/allow-read" 2>&1
+check "allow_read ignored with a warning" grep -q "allow_read is no longer used" "$T/out/allow-read"
+check_not "allow_read does not open ~/.ssh" sh -c "grep -q known_hosts '$COPY/run/srt-settings.json' 2>/dev/null && ! grep -q '\"$T/home/.ssh\"' '$COPY/run/srt-settings.json'"
 
 # --- uninstall ----------------------------------------------------------------------
 
 section "uninstall"
-echo "{ \"claude_bin\": \"$T/fakebin/claude\" }" > "$T/config.json"
+echo "{ \"claude_bin\": \"$T/fakebin/claude\", \"machine_scan\": false }" > "$T/config.json"
 cat > "$T/fakebin/s-unfetched.sh" <<'EOF'
 git checkout -q -b never-fetched && echo z > src/z.txt && git add src/z.txt && git commit -qm "never fetched"
 EOF

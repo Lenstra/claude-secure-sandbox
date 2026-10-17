@@ -6,7 +6,8 @@ You are running inside claude-secure-sandbox, an OS-level sandbox. @ACCESS@
 
 The sandbox:
 
-- Outside this directory, the machine is unreadable by design: the home directory, other projects, temp directories, credentials. System directories and installed tools can be read and run. Do not try to get around the sandbox; trying wastes time.
+- You can read the rest of the computer, except, by design: protected repositories (folders with a `.claudeprotected` file), old Claude conversations, and, when protected repositories exist, credentials (SSH keys, keychain, tokens) and temp directories. Do not try to get around the sandbox; trying wastes time.
+- Outside this directory, you can write only in your temp directory ($TMPDIR).
 - Network access is limited to an allowlist of domains, with no git host. There is no git credential and no SSH agent: do not try `git push`, `git pull` or `git fetch`.
 
 Git workflow:

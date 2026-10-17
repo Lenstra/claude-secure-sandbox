@@ -59,6 +59,11 @@ def path_within(parent: str, path: str) -> bool:
     return path == parent or path.startswith(parent + "/")
 
 
+def overlaps(a: str, b: str) -> bool:
+    """True if one path lies within the other."""
+    return path_within(a, b) or path_within(b, a)
+
+
 def expand_home(path: str) -> str:
     home = os.environ["HOME"]
     if path == "~":
@@ -132,6 +137,23 @@ def read_lines(path: str) -> List[str]:
         return [line for line in read_text(path).splitlines() if line]
     except FileNotFoundError:
         return []
+
+
+def load_json(path: str):
+    """The JSON content of path, or None if it is missing or invalid."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def install_json(data, dst: str, tmp_dir: str) -> None:
+    """Writes data to dst through a file in tmp_dir: a link planted at dst is
+    replaced, never followed."""
+    tmp = os.path.join(tmp_dir, os.path.basename(dst))
+    write_text(tmp, json.dumps(data, indent=2) + "\n")
+    install_file(tmp, dst)
 
 
 def write_lines(path: str, lines: Iterable[str]) -> None:

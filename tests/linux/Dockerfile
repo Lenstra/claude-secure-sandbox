@@ -9,6 +9,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -m dev
 USER dev
+# Tests outside /tmp: once protected code exists, the sandbox hides /tmp, and a
+# real home directory never lives there.
+RUN mkdir -p /home/dev/tmp
+ENV TMPDIR=/home/dev/tmp
 WORKDIR /home/dev/claude-secure-sandbox
 COPY --chown=dev package.json package-lock.json ./
 RUN npm ci --silent

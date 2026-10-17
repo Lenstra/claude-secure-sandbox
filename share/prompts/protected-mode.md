@@ -18,7 +18,8 @@ How this affects your work:
 
 The sandbox:
 
-- The rest of the machine is unreadable by design: the developer's repository, the home directory, other projects, temp directories, credentials. System directories and installed tools can be read and run. Do not try to read, recreate or guess protected content, and do not try to get around the sandbox; trying wastes time.
+- You can read the rest of the computer, except, by design: the developer's original repository, other protected repositories, credentials (SSH keys, keychain, tokens), temp directories and old Claude conversations. Do not try to read, recreate or guess protected content, and do not try to get around the sandbox; trying wastes time.
+- You can write only in this copy and in your temp directory ($TMPDIR).
 - Network access is limited to an allowlist of domains, with no git host. There is no git credential and no SSH agent: do not try `git push`, `git pull` or `git fetch`.
 
 Git workflow:

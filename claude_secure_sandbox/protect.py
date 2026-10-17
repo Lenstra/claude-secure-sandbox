@@ -14,8 +14,9 @@ from .common import (NAME, PROTECT_FILE, Git, ask, die, log, path_within, read_l
 _PATTERN_CHARS = set("*?[\\")
 
 
-def find_nested_protect_files(root: str, one_file_system: bool = False) -> List[str]:
-    """Protection files under root, other than root/.claudeprotected."""
+def find_protect_files(root: str, one_file_system: bool = False, timeout: float = None) -> List[str]:
+    """Every protection file under root (fd, else rg, else find), skipping
+    .git and node_modules, and ~/Library when root is the home directory."""
     home = os.environ["HOME"]
     # fd is installed as fdfind on Debian and Ubuntu.
     fd = shutil.which("fd") or shutil.which("fdfind")
@@ -31,16 +32,23 @@ def find_nested_protect_files(root: str, one_file_system: bool = False) -> List[
                "-g", PROTECT_FILE, "-g", "!.git", "-g", "!node_modules"]
         if root == home:
             cmd += ["-g", f"!{home}/Library"]
+        if one_file_system:
+            cmd += ["--one-file-system"]
         cmd += [root]
     else:
-        cmd = ["find", root, "(", "-name", ".git", "-o", "-name", "node_modules", ")", "-prune",
-               "-o", "-type", "f", "-name", PROTECT_FILE, "-print"]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          encoding="utf-8", errors="surrogateescape")
+        cmd = ["find", root] + (["-xdev"] if one_file_system else []) + [
+            "(", "-name", ".git", "-o", "-name", "node_modules", ")", "-prune",
+            "-o", "-type", "f", "-name", PROTECT_FILE, "-print"]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              encoding="utf-8", errors="surrogateescape", timeout=timeout)
+        output = proc.stdout
+    except subprocess.TimeoutExpired as e:
+        output = e.stdout.decode("utf-8", "surrogateescape") if isinstance(e.stdout, bytes) else (e.stdout or "")
     found = []
-    for f in proc.stdout.splitlines():
+    for f in output.splitlines():
         f = f.rstrip("/")
-        if not f or f in (f"{root}/{PROTECT_FILE}", f"./{PROTECT_FILE}", PROTECT_FILE):
+        if not f:
             continue
         if not f.startswith("/"):
             f = f"{root}/{f[2:] if f.startswith('./') else f}"
