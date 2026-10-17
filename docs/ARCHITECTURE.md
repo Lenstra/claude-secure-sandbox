@@ -286,8 +286,11 @@ The Seatbelt profile is attached to the process by the kernel and inherited by e
 | Linux: `systemd-run --user`, `xdg-open`, the D-Bus session bus | denied: no Unix socket is reachable |
 | SSH agent and other Unix sockets | denied |
 | TCP to `localhost` | denied: only the `srt` proxy is reachable (`allowLocalBinding: false`) |
+| macOS: reading or writing another terminal of the developer (`/dev/ttys*`), to catch what is typed there | denied: terminal access is limited to Claude's own terminal |
 | writing `~/.zshrc`, a LaunchAgent, an autostart entry, the `xcrun` cache | the real files are never written |
 | a detached process after the session | macOS: still confined, it cannot read what the session could not (credentials, here) and loses the network when `srt` exits; Linux: ended with the session |
+
+Claude's interface puts its terminal in raw mode to read keys, and Seatbelt denies terminal control by default. `srt`'s `allowPty` setting allows it on every `/dev/ttys*`, which would also let Claude open the developer's other terminals and read what is typed there (a `sudo` password, for instance). On macOS, when Claude runs in a terminal, the wrapper sets `allowPty` and loads `libexec/srt-own-terminal.mjs` into `srt` (`node --import`): just before `srt` starts `sandbox-exec`, it rewrites that rule to Claude's own terminal only (`(literal "/dev/ttysNNN")`), and refuses to run anything if the rule is not found, for instance after an `srt` upgrade. Injecting keystrokes into the terminal (`TIOCSTI`) stays denied by the kernel. On Linux, bubblewrap does not restrict terminal control.
 
 Two channels remain outside the sandbox's reach by nature: what the developer runs from Claude's commits after merging them (build scripts, `package.json`, CI), which review covers; and escape sequences written to the developer's terminal, which a terminal may use to set the clipboard (OSC 52; in Ghostty, `clipboard-write = ask`). The copy should not be opened in an IDE that runs project tasks or `.envrc` files.
 

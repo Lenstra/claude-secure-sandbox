@@ -306,7 +306,19 @@ def write_srt_settings(ctx: Context) -> None:
         "allowAppleEvents": False,
         "enableWeakerNetworkIsolation": False,
     }
+    if own_terminal():
+        settings["allowPty"] = True
     write_text(os.path.join(ctx.run_dir, "srt-settings.json"), json.dumps(settings, indent=2) + "\n")
+
+
+def own_terminal() -> str:
+    """On macOS, the terminal Claude runs in, when there is one. Seatbelt
+    denies terminal control (raw mode, which Claude's interface needs to read
+    keys) unless srt's allowPty is set; libexec/srt-own-terminal.mjs then
+    narrows it to this terminal."""
+    if platform.system() != "Darwin" or not os.isatty(0):
+        return ""
+    return os.ttyname(0)
 
 
 def git_files_present(ctx: Context) -> List[str]:
@@ -367,6 +379,11 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
            "/usr/bin/env", f"TMPDIR={ctx.tmp}/", realpath(ctx.real_claude),
            "--settings", claude_settings(ctx),
            "--append-system-prompt-file", os.path.join(ctx.run_dir, "system-prompt.md"), *args]
+    terminal = own_terminal()
+    if terminal:
+        node = shutil.which("node") or die("node not found")
+        cmd = [node, "--import", os.path.join(ctx.root, "libexec", "srt-own-terminal.mjs"), *cmd]
+        env["CLAUDE_SECURE_SANDBOX_TTY"] = terminal
     # Ctrl-C goes to Claude; the wrapper must survive to print the end of
     # session summary. A handler (unlike an ignored signal) is reset in child
     # processes.

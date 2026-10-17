@@ -523,6 +523,26 @@ check_not "after the session it still cannot read the home" grep -q read-home "$
 check_not "after the session it has no network" grep -q network "$COPY/tmp/survivor"
 rm -f "$COPY/tmp/survivor" "$SOCK"
 
+if [ "$OS" = Darwin ]; then
+section "terminal: Claude's own only"
+# Another terminal of the user, open while the session runs.
+python3 -c 'import os, pty, sys, time
+m, s = pty.openpty(); open(sys.argv[1], "w").write(os.ttyname(s)); time.sleep(30)' "$T/out/other-tty" &
+tty_pid=$!
+sleep 1
+cat > "$T/fakebin/s-tty.sh" <<EOF
+t()  { if "\$@" >/dev/null 2>&1; then echo "IN-OK \$name"; else echo "IN-FAIL \$name"; fi; }
+tn() { if "\$@" >/dev/null 2>&1; then echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi; }
+name="raw mode works on Claude's terminal"; t stty raw; stty sane
+name="another terminal cannot be opened";   tn python3 -c 'import os, sys; os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY)' "$(cat "$T/out/other-tty")"
+EOF
+run_claude_answer "" "$T/fakebin/s-tty.sh"
+collect
+kill $tty_pid 2>/dev/null; wait $tty_pid 2>/dev/null
+check "srt's terminal rule narrowed (refuses a bad terminal)" sh -c \
+  "CLAUDE_SECURE_SANDBOX_TTY=/dev/ttys9x node --import '$ROOT/libexec/srt-own-terminal.mjs' '$ROOT/node_modules/.bin/srt' -- true 2>&1 | grep -q 'unexpected terminal'"
+fi
+
 # --- 5. launch cases ---------------------------------------------------------------
 
 section "launch cases"
