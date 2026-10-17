@@ -61,7 +61,9 @@ def sync_claude_config(ctx: Context) -> None:
             warn(f"cannot pass ~/.claude/{item} through")
     # MCP servers of ~/.claude.json, copied into the sandbox's .claude.json:
     # the global ones, and those of this repository (claude mcp add, local
-    # scope), attached to the directory Claude works in. The rest of that file
+    # scope), attached to the directory Claude works in, with the trust given
+    # to this repository. The onboarding (theme, login) done outside too:
+    # without it, Claude Code starts over in the sandbox. The rest of that file
     # is Claude Code's state (account, every project's paths and sessions),
     # rewritten constantly, so it is neither passed through nor copied. The
     # sandbox's .claude.json is only read when it is a regular file (not a
@@ -73,6 +75,9 @@ def sync_claude_config(ctx: Context) -> None:
         current = load_json(target) if regular_file(target) else None
         data = current if isinstance(current, dict) else {}
         data["mcpServers"] = source.get("mcpServers") or {}
+        for key in ONBOARDING_KEYS:
+            if key in source:
+                data[key] = source[key]
         projects = source.get("projects") if isinstance(source.get("projects"), dict) else {}
         mine = projects.get(ctx.dev_root) if isinstance(projects.get(ctx.dev_root), dict) else {}
         if not isinstance(data.get("projects"), dict):
@@ -80,8 +85,13 @@ def sync_claude_config(ctx: Context) -> None:
         entry = data["projects"].get(ctx.work)
         entry = entry if isinstance(entry, dict) else {}
         entry["mcpServers"] = mine.get("mcpServers") or {}
+        if mine.get("hasTrustDialogAccepted") is True:
+            entry["hasTrustDialogAccepted"] = True
         data["projects"][ctx.work] = entry
         install_json(data, target, ctx.wtmp)
+
+
+ONBOARDING_KEYS = ("hasCompletedOnboarding", "lastOnboardingVersion", "theme")
 
 
 # Claude Code's login on macOS, in the user's keychain.
