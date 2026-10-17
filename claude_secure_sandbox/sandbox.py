@@ -587,6 +587,21 @@ def claude_settings(ctx: Context) -> str:
     return json.dumps(settings, ensure_ascii=False)
 
 
+def known_protected_repositories(ctx: Context) -> List[str]:
+    """Protected repositories the wrapper has been used in, outside the
+    session's directory, as the developer would write them (~/...)."""
+    home = os.environ["HOME"]
+    found = []
+    for marker in sorted(glob.glob(os.path.join(ctx.state_root, "*", "state", "repository"))):
+        try:
+            repo = read_text(marker).strip()
+        except OSError:
+            continue
+        if repo and os.path.isfile(os.path.join(repo, PROTECT_FILE)) and not path_within(ctx.work, repo):
+            found.append("~" + repo[len(home):] if path_within(home, repo) else repo)
+    return found
+
+
 def confirm_session(ctx: Context) -> bool:
     """In a terminal, says which mode starts and why, then waits for Enter.
     Returns False if the developer cancels."""
@@ -608,15 +623,19 @@ def confirm_session(ctx: Context) -> bool:
         lines = [
             "Claude can read:     everything in it, including SSH keys and keychain",
             "Claude can edit:     nothing there; it will tell you the changes to make",
-            "Hidden from Claude:  your old Claude conversations, protected projects elsewhere",
+            "Hidden from Claude:  your old Claude conversations, and other disks",
         ]
     else:
         intro = f"No {PROTECT_FILE} here: Claude works directly in this folder."
         lines = [
             f"Claude can edit:     {ctx.work}",
-            "Hidden from Claude:  the rest of your computer: protected repositories, your home folder,",
-            "                     other projects, SSH keys",
+            "Hidden from Claude:  the rest of your computer (home folder, other projects, SSH keys)",
         ]
+    if ctx.directory_mode:
+        protected = known_protected_repositories(ctx)
+        if protected:
+            shown = ", ".join(protected[:3]) + (f" and {len(protected) - 3} more" if len(protected) > 3 else "")
+            lines.append(f"Protected, hidden:   {shown}")
     title = NAME
     prompt = "Press Enter to start Claude, or Ctrl-C to cancel: "
     texts = ["", f"🔒 {title}", "", intro, ""] + [f"   {line}" for line in lines] + ["", prompt]

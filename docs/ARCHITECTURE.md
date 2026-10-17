@@ -324,7 +324,7 @@ MCP servers live in `~/.claude.json`, which is Claude Code's state rather than c
 
 ### Session marker
 
-A sandboxed session shows itself, so that the developer notices when `claude` is not the wrapper. At launch, in a terminal only, the wrapper prints a screen in plain words: why this mode (a `.claudeprotected` at the repository root, none in the directory, a directory that holds the home folder), what is hidden from Claude (the protected paths themselves, or the rest of the computer), and what Claude can edit, then waits for Enter and erases itself, so that Claude Code takes a clean terminal; Ctrl-C or end of input cancels the session. Without a terminal (`claude -p` in a script), it starts at once. During the session, Claude Code's status line reads `🔒 sandboxed · protected repository <name> · <branch>` (or `· directory <name>`), passed with the other settings on Claude Code's command line; it is left out when the developer configured their own status line, in `~/.claude` or in the repository.
+A sandboxed session shows itself, so that the developer notices when `claude` is not the wrapper. At launch, in a terminal only, the wrapper prints a screen in plain words: why this mode (a `.claudeprotected` at the repository root, none in the directory, a directory that holds the home folder), what is hidden from Claude (the protected paths themselves, or the rest of the computer, naming the protected repositories the wrapper has been used in), and what Claude can edit, then waits for Enter and erases itself, so that Claude Code takes a clean terminal; Ctrl-C or end of input cancels the session. Without a terminal (`claude -p` in a script), it starts at once. During the session, Claude Code's status line reads `🔒 sandboxed · protected repository <name> · <branch>` (or `· directory <name>`), passed with the other settings on Claude Code's command line; it is left out when the developer configured their own status line, in `~/.claude` or in the repository.
 
 ### System prompt
 
@@ -573,7 +573,7 @@ flowchart LR
 - [x] Claude Code's login copied from the keychain, without opening the keychain.
 - [x] Linux (bubblewrap), with the end-to-end suite run in Docker (`npm run test:linux`).
 - [x] Separate Claude configuration, synced one way.
-- [x] End-to-end tests: 205 on macOS, 201 on Linux.
+- [x] End-to-end tests: 206 on macOS, 202 on Linux.
 
 ### Next: validation on a real machine
 

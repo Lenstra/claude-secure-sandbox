@@ -555,6 +555,12 @@ check "repository without protection file: sandboxed" grep -q "^SANDBOXED cwd=$F
 check "arguments passed" grep -q -- 'ARGS .*--foo' "$T/out/last"
 collect
 check "Claude's commit is in the repository" sh -c "git -C '$F' log -1 --format=%s | grep -q 'by claude'"
+if [ "$OS" = Darwin ]; then
+  ( cd "$F" && sleep 3 | script -q /dev/null claude ) > "$T/out/screen" 2>&1
+else
+  ( cd "$F" && sleep 3 | script -q -e -c claude /dev/null ) > "$T/out/screen" 2>&1
+fi
+check "directory mode screen names the protected repository elsewhere" grep -q "Protected, hidden:   $D" "$T/out/screen"
 cat > "$T/fakebin/s-nogit.sh" <<'EOF'
 if cat loose.txt >/dev/null 2>&1; then echo "IN-OK outside a repository: the directory is readable"; else echo "IN-FAIL outside a repository: the directory is readable"; fi
 EOF
