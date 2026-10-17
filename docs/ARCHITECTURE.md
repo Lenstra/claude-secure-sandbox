@@ -595,7 +595,7 @@ flowchart LR
 - [x] Claude Code's login copied from the keychain, without opening the keychain.
 - [x] Linux (bubblewrap), with the end-to-end suite run in Docker (`npm run test:linux`).
 - [x] Separate Claude configuration, synced one way.
-- [x] End-to-end tests: 214 on macOS, 209 on Linux.
+- [x] End-to-end tests: 222 on macOS, 214 on Linux.
 
 ### Next: validation on a real machine
 
@@ -672,7 +672,7 @@ tests/test_unit.py                          unit tests of the pure functions
 tests/linux/Dockerfile                      Linux test environment (Debian, bubblewrap)
 ```
 
-Run the tests with `npm test` (`jq` is needed by the end-to-end suite), and on Linux in Docker with `npm run test:linux`; the Docker image sets `TMPDIR` outside `/tmp`, because the sandbox hides `/tmp` when protected code exists. The end-to-end tests set `"machine_scan": false`, and test the scan itself separately. The unit tests cover `.claudeprotected` validation, path helpers and URL parsing. The end-to-end tests create a fake `HOME`, a test repository, a fake keychain and a fake `claude` binary that runs scenarios inside the real `srt` sandbox. They cover:
+Run the tests with `npm test` (`jq` is needed by the end-to-end suite), and on Linux in Docker with `npm run test:linux`; the Docker image sets `TMPDIR` outside `/tmp`, because the sandbox hides `/tmp` when protected code exists. The end-to-end tests set `"machine_scan": false`, and test the scan itself separately. Their temp directory holds protected repositories, which the machine scan of every later session would find: it is removed even after a failure or an interruption, unless `CS_TEST_KEEP=1` or `CS_TEST_DIR` is set. The unit tests cover `.claudeprotected` validation, path helpers and URL parsing. The end-to-end tests create a fake `HOME`, a test repository, a fake keychain and a fake `claude` binary that runs scenarios inside the real `srt` sandbox. They cover:
 
 - reads through the denylist: the developer repository, `~/.ssh` and the signing key, old transcripts in `~/.claude`, the wrapper state, `/tmp` and the user's temp directory hidden, the rest of the computer readable; credentials hidden when protected code exists; a locked `.git`, and network filtering;
 - escape attempts: `launchctl`, `crontab`, `at`, `open`, Apple Events, clipboard, Unix sockets, localhost, `~/.zshrc`, LaunchAgents, the `xcrun` cache, and a detached process outliving the session;

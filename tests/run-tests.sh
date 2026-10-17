@@ -10,6 +10,17 @@ ROOT=$(cd -P "$(dirname "$0")/.." && pwd)
 OS=$(uname)
 T=${CS_TEST_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/cs-test.XXXXXX")}
 T=$(cd -P "$T" && pwd)
+# The test directory holds protected repositories: left behind, the machine
+# scan of every later session would find them. Removed whatever happens,
+# unless CS_TEST_KEEP=1 or CS_TEST_DIR is set.
+KEEP=${CS_TEST_KEEP:-}; [ -z "${CS_TEST_DIR:-}" ] || KEEP=1
+PROBE_TMP=; PROBE_USER_TMP=
+cleanup() {
+  rm -f $PROBE_TMP $PROBE_USER_TMP
+  if [ -z "$KEEP" ]; then rm -rf "$T"; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 PASS=0; FAILED=0; FAIL_NAMES=
 PF=.claudeprotected
 PLACEHOLDER="[claude-secure-sandbox] hidden by $PF"
@@ -696,7 +707,7 @@ check "configuration kept" test -f "$CLAUDE_SECURE_SANDBOX_CONFIG"
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILED"
 if [ "$FAILED" -gt 0 ]; then
   printf 'Failures:%s\n' "$FAIL_NAMES"
-  printf 'Test directory kept: %s\n' "$T"
+  if [ -n "$KEEP" ]; then printf 'Test directory kept: %s\n' "$T"
+  else printf 'Run with CS_TEST_KEEP=1 to keep the test directory.\n'; fi
   exit 1
 fi
-[ -n "${CS_TEST_DIR:-}" ] || rm -rf "$T"
