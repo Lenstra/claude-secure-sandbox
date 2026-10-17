@@ -1,10 +1,20 @@
 {
   "network": {
-    "allowed_domains": ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org"]
+    "allowed_domains": [
+      "registry.npmjs.org",
+      "pypi.org",
+      "files.pythonhosted.org"
+    ]
   },
-  "filesystem": {
-    "allow_read": ["~/.nvm", "~/.cargo", "~/.local/share/claude"]
-  },
-  "copy_dirs": ["node_modules"],
-  "sync": ["settings.json", "CLAUDE.md", "agents", "commands", "skills", "plugins"]
+  "copy_dirs": [
+    "node_modules"
+  ],
+  "sync": [
+    "settings.json",
+    "CLAUDE.md",
+    "agents",
+    "commands",
+    "skills",
+    "plugins"
+  ]
 }

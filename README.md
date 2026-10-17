@@ -4,7 +4,7 @@ Use Claude Code on repositories that contain code it must never read. You list t
 
 - **Enforced by the OS, not by the model.** Every `claude` session runs in an OS sandbox ([`srt`](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime): Seatbelt on macOS, bubblewrap on Linux). Protected content is not on Claude's disk at all, so no tool, script or `git show` can reach it, even if a prompt injection tells Claude to try.
 - **Git keeps working.** Claude works in a filtered copy of your repository with the same commits and SHAs. It reads history, commits on your branch, and you fetch its work with `git fetch claude`.
-- **Nothing else on the machine.** Claude reads its working directory, the system and the installed tools. Your home directory, other projects, temp directories, SSH keys and keychain stay out of reach, unless you start `claude` in your home directory itself.
+- **Other protected code stays hidden too.** Claude can read the rest of your computer, except every other protected repository on it, wherever it is, and your old Claude conversations. When protected code exists on the computer, your credentials (SSH keys, keychain, tokens) and temp files are hidden as well. Claude writes only in its working directory and its temp directory.
 - **Native, no Docker.** No VM and no image: sessions start instantly, with Claude Code as installed on the machine.
 
 How it works and why it is built this way: [architecture document](docs/ARCHITECTURE.md).
@@ -46,7 +46,7 @@ Then, as `install.sh` tells you with your own paths:
    command -v claude-unsandboxed   # .../claude-secure-sandbox/bin/claude-unsandboxed
    ```
 
-3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies Claude Code's keychain entry, and only it, into the sandbox; the rest of your keychain stays unreadable.
+3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies Claude Code's keychain entry, and only it, into the sandbox; the rest of your keychain stays hidden whenever protected code exists on your computer.
 
 > [!IMPORTANT]
 > If `command -v claude` does not point to the wrapper, `claude` runs Claude Code without any sandbox. Check it again after updating Claude Code or changing your `PATH`.
@@ -90,11 +90,9 @@ Then, as `install.sh` tells you with your own paths:
 > [!IMPORTANT]
 > If `command -v claude` does not point to the wrapper, `claude` runs Claude Code without any sandbox. Check it again after updating Claude Code or changing your `PATH`.
 
-System directories (`/usr`, `/lib`, `/etc`, `/opt`, and `/nix/store`, `/snap` or Linuxbrew when present) and the directories of your `PATH` outside your home directory are readable in the sandbox. If your distribution puts tools elsewhere, add them to `filesystem.allow_read` ([configuration](docs/ARCHITECTURE.md#10-configuration)).
-
 ## Usage
 
-Every `claude` session runs in the sandbox, and shows it. Before Claude starts, a screen says why this mode, what Claude will not see and what happens to your files; press Enter to start, or Ctrl-C to cancel:
+Every `claude` session runs in the sandbox, and shows it. At each launch, the wrapper first looks for protected repositories on your computer (`looking for protected repositories on this computer...`, a few seconds), so that it can hide them. Then a screen says why this mode, what Claude will not see and what happens to your files; press Enter to start, or Ctrl-C to cancel:
 
 ```
 🔒 claude-secure-sandbox
@@ -104,9 +102,15 @@ This repository is protected: it has a .claudeprotected file.
    Hidden from Claude:  core/engine, licensing/keys.go
    Claude works on:     a copy of this repository, branch feature-x
    Your files:          untouched; get Claude's commits with: git fetch claude
+   Claude can read:     the rest of your computer, except what follows
+   Protected, hidden:   ~/work/billing
+   Also hidden:         your credentials (SSH keys, keychain, tokens), temp files,
+                        and your old Claude conversations
 
 Press Enter to start Claude, or Ctrl-C to cancel:
 ```
+
+In a directory without a `.claudeprotected`, the screen starts with `No .claudeprotected here: Claude works directly in this folder.` and Claude edits that folder directly. Protected repositories elsewhere on the computer stay hidden, including one inside that folder.
 
 While Claude runs, the bottom line of Claude Code shows `🔒 sandboxed · protected repository my-repo · feature-x` (unless you already set your own status line).
 
@@ -115,7 +119,7 @@ If you see neither the screen nor that line, `claude` is not going through the s
 When a script runs Claude for you (for example `claude -p "..."` in a CI job), nobody is there to press Enter, so the screen is skipped and Claude starts right away.
 
 > [!NOTE]
-> Started in your home directory (or `/`) with no protected repository below, `claude` can read all of it, SSH keys and keychain included, but cannot write there: programs outside the sandbox run what lives in your home directory. Claude then writes only to its temp directory and gives you the changes to apply. Old Claude transcripts stay unreadable. Start `claude` in a project directory to let Claude edit files.
+> Started in your home directory (or `/`), `claude` can read it but cannot write there: programs outside the sandbox run what lives in your home directory. Claude then writes only to its temp directory and gives you the changes to apply. Protected repositories and old Claude transcripts stay hidden, and so do your credentials and temp files when protected code exists on the computer. Start `claude` in a project directory to let Claude edit files.
 
 The real binary stays available as `claude-unsandboxed`, for the rare session that must run without the sandbox.
 
@@ -220,7 +224,7 @@ Everything else is in the [architecture document](docs/ARCHITECTURE.md):
 - [what Claude sees](docs/ARCHITECTURE.md#what-claude-sees) in its copy, and why some public files are absent;
 - [what happens to the branches](docs/ARCHITECTURE.md#branches-at-a-new-session) when you run `claude` again, and the question asked when your branch and Claude's have diverged;
 - [adding or removing a protected path](docs/ARCHITECTURE.md#5-the-claudeprotected-file);
-- [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-session-modes);
+- [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-session-modes), and [what Claude can read on the rest of the computer](docs/ARCHITECTURE.md#reading-a-denylist);
 - [configuration](docs/ARCHITECTURE.md#10-configuration), [troubleshooting](docs/ARCHITECTURE.md#troubleshooting) and [limits](docs/ARCHITECTURE.md#14-limits-and-troubleshooting).
 
 Tests: `npm test` (unit tests, then end-to-end tests in the real sandbox; `jq` required), and `npm run test:linux` for the same suite on Linux, in Docker.
