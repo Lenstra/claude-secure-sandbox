@@ -554,10 +554,30 @@ EOF
 ( cd "$T/plain/nogit" && CS_TEST_SCENARIO=$T/fakebin/s-nogit.sh claude ) < /dev/null > "$T/out/last" 2>&1
 check "directory without a repository: sandboxed" grep -q "^SANDBOXED cwd=$T/plain/nogit" "$T/out/last"
 collect
-out=$(cd "$T/home" && claude 2>&1 < /dev/null)
-check "refused in the home directory" sh -c "printf '%s' '$out' | grep -q 'holds your home directory'"
+
+section "home directory without protected code: readable, not writable"
+HOME_RUN=$STATE_ROOT/home-$(python3 -c 'import hashlib, sys; print(hashlib.sha1(sys.argv[1].encode()).hexdigest()[:10])' "$T/home")/run
+cat > "$T/fakebin/s-home.sh" <<EOF
+t()  { if "\$@" >/dev/null 2>&1; then echo "IN-OK \$name"; else echo "IN-FAIL \$name"; fi; }
+tn() { if "\$@" >/dev/null 2>&1; then echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi; }
+name="home: the whole home directory is readable";        t cat "$T/home/.ssh/id_test"
+name="home: old Claude transcripts stay unreadable";       tn cat "$T/home/.claude/projects/-old-session/t.jsonl"
+name="home: other repositories' copies stay unreadable";   tn ls "$COPY/state"
+name="home: Claude's configuration is readable";           t ls "\$CLAUDE_CONFIG_DIR"
+name="home: the home directory can be listed";             t sh -c 'ls -a "$T/home" | grep -q "^.ssh\$"'
+name="home: the system prompt is readable";                t cat "$HOME_RUN/system-prompt.md"
+name="home: the session temp directory is readable";       t ls "\$TMPDIR"
+name="home: a protected repository elsewhere is unreadable"; tn cat "$D/src/a.txt"
+name="home: writing in the temp directory works";          t sh -c 'echo x > "\$TMPDIR/home-test"'
+sh -c 'echo x > "$T/home/written-by-claude"' 2>/dev/null
+EOF
+( cd "$T/home" && CS_TEST_SCENARIO=$T/fakebin/s-home.sh claude ) < /dev/null > "$T/out/last" 2>&1
+check "home: sandboxed in the home directory" grep -q "^SANDBOXED cwd=$T/home" "$T/out/last"
+collect
+check "home: nothing written in the home directory" test ! -e "$T/home/written-by-claude"
+check "home: status line says read only" grep -q -- '(read only)' "$T/out/last"
 ( cd / && claude ) < /dev/null > "$T/out/root" 2>&1
-check "refused in /, saying where claude was started" grep -q "claude was started in /\. A session can read its whole directory" "$T/out/root"
+check "from /, a protected repository below is found and refused" grep -q "protected code in .*: run claude from that directory" "$T/out/root"
 out=$(cd "$D" && claude --version 2>&1)
 check "--version without sandbox" sh -c "printf '%s' '$out' | grep -q '^UNSANDBOXED --version'"
 out=$(cd "$D/secret" && claude 2>&1)

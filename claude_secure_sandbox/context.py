@@ -28,6 +28,8 @@ class Context:
         # Directory mode: no .claudeprotected; Claude works in dev_root itself,
         # and nothing else of the user's is readable.
         self.directory_mode = False
+        # Directory mode in a directory that holds the home directory: read only.
+        self.read_only_root = False
         # Real paths of the ~/.claude items passed through to the sandbox.
         self.config_read: List[str] = []
         self.lock: Optional[Lock] = None

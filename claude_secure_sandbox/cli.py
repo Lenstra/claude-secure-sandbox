@@ -14,7 +14,7 @@ import subprocess
 from typing import List, NoReturn
 
 from . import filtered_copy, sandbox, session
-from .common import (PROTECT_FILE, Lock, check_deps, die, find_real_claude, find_srt,
+from .common import (PROTECT_FILE, Lock, check_deps, die, find_real_claude, find_srt, log,
                      load_config, path_within, realpath, state_root, volume_roots, warn)
 from .context import Context
 from .protect import (find_nested_protect_files, is_protected_path, keep_removed_protections,
@@ -82,16 +82,18 @@ def main(root: str, args: List[str]) -> int:
     toplevel = _git_toplevel(cwd)
     ctx.dev_root = realpath(toplevel) if toplevel else cwd
 
-    # The session can read this directory: it must not hold the home
-    # directory, the wrapper's state or other volumes.
+    # A directory that holds the home directory (or other volumes) is readable
+    # in full, but not writable: programs outside the sandbox run what lives
+    # there (shell startup files, LaunchAgents, tool configurations).
     home = os.environ["HOME"]
-    if ctx.dev_root == "/" or any(path_within(ctx.dev_root, s)
-                                  for s in [home, os.path.dirname(home), ctx.state_root] + volume_roots()):
-        where = f"in {cwd}" if ctx.dev_root == cwd else f"in {cwd}, in the git repository {ctx.dev_root}"
-        die(f"claude was started {where}. A session can read its whole directory, and this one holds "
-            "your home directory or other volumes, with your credentials: run claude from a project directory")
+    ctx.read_only_root = ctx.dev_root == "/" or any(
+        path_within(ctx.dev_root, s) for s in [home, os.path.dirname(home)] + volume_roots())
+    if ctx.dev_root == "/":
+        log("looking for protected repositories on the system disk (a few seconds)")
 
-    nested = [f for f in find_nested_protect_files(ctx.dev_root) if not path_within(ctx.state_root, f)]
+    # From /, other disks are not scanned; they stay unreadable.
+    nested = [f for f in find_nested_protect_files(ctx.dev_root, one_file_system=ctx.dev_root == "/")
+              if not path_within(ctx.state_root, f)]
     if nested:
         die(f"protected code in {os.path.dirname(nested[0])}: run claude from that directory")
 

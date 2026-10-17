@@ -4,7 +4,7 @@ Use Claude Code on repositories that contain code it must never read. You list t
 
 - **Enforced by the OS, not by the model.** Every `claude` session runs in an OS sandbox ([`srt`](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime): Seatbelt on macOS, bubblewrap on Linux). Protected content is not on Claude's disk at all, so no tool, script or `git show` can reach it, even if a prompt injection tells Claude to try.
 - **Git keeps working.** Claude works in a filtered copy of your repository with the same commits and SHAs. It reads history, commits on your branch, and you fetch its work with `git fetch claude`.
-- **Nothing else on the machine.** Claude reads its working directory, the system and the installed tools. Your home directory, other projects, temp directories, SSH keys and keychain stay out of reach, in every session.
+- **Nothing else on the machine.** Claude reads its working directory, the system and the installed tools. Your home directory, other projects, temp directories, SSH keys and keychain stay out of reach, unless you start `claude` in your home directory itself.
 - **Native, no Docker.** No VM and no image: sessions start instantly, with Claude Code as installed on the machine.
 
 How it works and why it is built this way: [architecture document](docs/ARCHITECTURE.md).
@@ -95,6 +95,9 @@ System directories (`/usr`, `/lib`, `/etc`, `/opt`, and `/nix/store`, `/snap` or
 ## Usage
 
 Every `claude` session runs in the sandbox, and shows it: a green `🔒 claude-secure-sandbox: sandboxed session` banner at launch, and the Claude Code status line `🔒 sandboxed · protected repository my-repo · feature-x` during the session (unless you configured your own status line). If you see neither, `claude` is not the wrapper: check your `PATH`.
+
+> [!NOTE]
+> Started in your home directory (or `/`) with no protected repository below, `claude` can read all of it, SSH keys and keychain included, but cannot write there: programs outside the sandbox run what lives in your home directory. Claude then writes only to its temp directory and gives you the changes to apply. Old Claude transcripts stay unreadable. Start `claude` in a project directory to let Claude edit files.
 
 The real binary stays available as `claude-unsandboxed`, for the rare session that must run without the sandbox.
 

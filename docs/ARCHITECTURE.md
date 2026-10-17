@@ -117,9 +117,7 @@ flowchart TD
   sub -- yes --> real["exec the real claude"]
   sub -- no --> inside{"Already in a sandbox<br/>or inside the wrapper's state?"}
   inside -- yes --> real
-  inside -- no --> home{"Directory holds the home<br/>directory or other volumes?"}
-  home -- yes --> refusehome["refuse: run claude<br/>from a project directory"]
-  home -- no --> nested{".claudeprotected below<br/>the repository root?"}
+  inside -- no --> nested{".claudeprotected below<br/>the repository root?"}
   nested -- yes --> refuse["refuse: run claude<br/>from that directory"]
   nested -- no --> root{".claudeprotected at the<br/>repository root?"}
   root -- yes --> protected["protected mode:<br/>filtered copy + sandbox"]
@@ -141,7 +139,7 @@ In both modes the rest of the machine is unreadable (section 7), so a protected 
 - **Finding the real binary.** `claude_bin` from the configuration, otherwise the first `claude` on the `PATH` that is not the wrapper itself (symlinks resolved).
 - **Subcommands without a session** run unchanged: `-v`, `--version`, `-h`, `--help`, `update`, `doctor`, `mcp`, `config`, `plugin`, `setup-token`, `install`, `migrate-installer`.
 - **Nested sandboxes.** Inside a sandbox the wrapper sets `CLAUDE_SECURE_SANDBOX_ACTIVE=1`; a `claude` started from there runs the real binary, already confined.
-- **Home directory.** The directory a session can read must not hold the home directory, its parent (`/Users`, `/home`), other volumes (`/Volumes`; `/mnt`, `/media`, `/run/media` on Linux) or the wrapper's state: running `claude` in `~` or `/` is refused. It would make the credentials readable, the keychain included (section 7).
+- **Home directory.** Started in a directory that holds the home directory (`~`, `/Users` or `/home`, `/`) or other volumes, with no protected repository below it, a directory-mode session can read all of it, credentials and keychain included: that is the developer's choice when nothing is protected. It cannot write there, though: programs outside the sandbox run what lives in the home directory (shell startup files, LaunchAgents, tool configurations, `~/.claude`), so Claude writes only to its temp directory and gives the developer the changes to apply. Old Claude transcripts (`~/.claude/projects`, `file-history`, `history.jsonl`...) and the wrapper's state stay unreadable: they may hold protected code read elsewhere. From `/`, the scan for protection files stays on the system disk (about 5 s) and the other disks stay unreadable.
 - **Protection files further down.** The subtree of the repository root (or of the current directory outside a repository) is scanned for `.claudeprotected` with `fd`, else `rg`, else `find`, skipping `.git`, `node_modules` and the wrapper's state: about 0.07 s for 75,000 files, 0.7 s for a 550,000-file home directory. A protection file anywhere other than the root leads to a refusal: running from a parent directory would expose that repository.
 - **Preconditions:** macOS or Linux, `git`, `rg`, `srt` installed by `npm ci`, and on Linux `bwrap` and `socat`. In protected mode, no git worktree. Submodules trigger a warning: their content is missing from the copy. A lock (`state/lock`, with the PID) allows one session per protected repository; a stale lock is taken over. Starting from inside a protected path is refused; from another subdirectory, Claude starts in the same subdirectory of the copy.
 - **Directory mode** has no copy, no lock and no end of session summary. `.git/config`, `.git/hooks` and the other locked paths of `.git` are read-only (section 7): the developer's git, outside the sandbox, would otherwise run what Claude writes there. It uses its own system prompt, `share/prompts/directory-mode.md`.
@@ -245,7 +243,8 @@ Claude Code's own sandbox is disabled because `srt` already wraps the whole proc
 | The `/etc`, `/var` and `/tmp` links themselves, as exact-match globs, so that paths through them resolve; not the directories they lead to | read |
 | `xcrun`'s lookup cache in the user's temp directory | read only (below) |
 | Paths of `filesystem.allow_read` and `allow_write` | read, or read and write |
-| Everything else: `$HOME`, `/Users`, `/Volumes`, `/tmp`, the user's temp directory (`/var/folders`), `/Applications`, other projects, the wrapper's state, archives, other repositories' sessions | none |
+| Everything else: `$HOME`, `/Users`, `/Volumes`, `/tmp`, the user's temp directory (`/var/folders`), `/Applications`, other projects, the wrapper's state, archives, other repositories' sessions | none, except what a directory-mode session started in the home directory or above can read (section 4) |
+| Old Claude transcripts and history in `~/.claude` | none, in every session |
 | In protected mode, the developer's repository and its `.git` | none |
 
 - A tool whose installation prefix holds or sits inside a sensitive area (the home directory, `~/.ssh`, `~/.claude`, the repository, the wrapper's state) is not made readable. A Claude Code installation inside such an area is refused, except `~/.claude/local`.
@@ -293,7 +292,7 @@ Two channels remain outside the sandbox's reach by nature: what the developer ru
 
 ### Keychain and login
 
-`srt` always allows the Mach services of the macOS keychain (`securityd`). With `$HOME` readable, a sandboxed process can read keychain items without any prompt, for example git credentials through `git credential-osxkeychain`. Those credentials open the server that hosts the protected code; from the sandbox they could leave through the conversation, through server-side tools such as web search, or through an allowed domain. The wrapper keeps `$HOME` unreadable, which hides the login keychain, and refuses any session or configuration that would open it.
+`srt` always allows the Mach services of the macOS keychain (`securityd`). With `$HOME` readable, a sandboxed process can read keychain items without any prompt, for example git credentials through `git credential-osxkeychain`. Those credentials open the server that hosts the protected code; from the sandbox they could leave through the conversation, through server-side tools such as web search, or through an allowed domain. The wrapper keeps `$HOME` unreadable, which hides the login keychain, and refuses any configuration that would open it. The one exception is a session the developer starts in the home directory or above, with no protected repository below (section 4).
 
 Claude Code keeps its own login in the keychain on macOS (entry `Claude Code-credentials`), and in `~/.claude/.credentials.json` on Linux. At each launch the wrapper reads that login, and only it, outside the sandbox, and writes it to `claude-home/.credentials.json` (mode 600), where Claude Code falls back when the keychain is unavailable. A newer login already there, refreshed by Claude Code during a session, is kept. Nothing is ever written back to the keychain. Without a login in the keychain, `/login` inside a session stores one in the same file. Claude can read its own token; it can only send it to allowed domains, which is one more reason to keep that list short.
 
@@ -556,7 +555,8 @@ flowchart LR
 | A package registry or API is unreachable | Add the domain to `network.allowed_domains`. |
 | `git push` or `git pull` fails inside the session | Expected: the sandbox has no git credentials and no access to git hosts. Claude's work is fetched with `git fetch claude`. |
 | `git fetch claude` shows an unknown branch | Claude created it in its copy. |
-| `claude` is refused in a directory | It holds the home directory or another volume, or a protected repository further down: run `claude` from the project directory. |
+| `claude` is refused in a directory | A protected repository is further down: run `claude` from that repository. |
+| Claude cannot change files in the home directory | Expected when started in the home directory or above: the session is read only there. Start `claude` in the project directory to let Claude edit it. |
 | Linux: the sandbox fails with "Operation not permitted" | bubblewrap cannot create user namespaces: on Ubuntu 24.04 and later, set `kernel.apparmor_restrict_unprivileged_userns=0` or add an AppArmor profile for `bwrap`. |
 | Linux: `.bashrc`, `.gitconfig` or `.vscode` appear in the directory during a session | `srt`'s stand-ins for the files it write-protects (section 7); they disappear when the session ends, and the sandbox's git ignores them. |
 
@@ -573,7 +573,7 @@ flowchart LR
 - [x] Claude Code's login copied from the keychain, without opening the keychain.
 - [x] Linux (bubblewrap), with the end-to-end suite run in Docker (`npm run test:linux`).
 - [x] Separate Claude configuration, synced one way.
-- [x] End-to-end tests: 191 on macOS; the same suite on Linux, minus the macOS-only checks.
+- [x] End-to-end tests: 203 on macOS, 199 on Linux.
 
 ### Next: validation on a real machine
 
@@ -654,7 +654,7 @@ Run the tests with `npm test` (`jq` is needed by the end-to-end suite), and on L
 - `git fetch claude` and `git pull`, a commit referencing hidden content, signing by the developer's rebase;
 - the branch choice at a new session (Claude ahead, integrated after a rebase, diverged with each answer), the developer's other branches (kept, updated, deleted), resume;
 - removed protections (no terminal, refused, confirmed, protected again), `.claudeprotected` additions, tampering with `.git`, planted links;
-- directory mode, the home directory refused, Claude Code's login and temp root, the configuration passed through read only and the MCP servers copied, launch cases and refused configurations;
+- directory mode; the home directory readable but not writable, old transcripts and the wrapper's state unreadable there, a protected repository found from `/`; Claude Code's login and temp root, the configuration passed through read only and the MCP servers copied, launch cases and refused configurations;
 - `uninstall.sh`: nothing changed, the PATH line located, unfetched branches reported, the removal commands of the remote, the state and the configuration shown.
 
 Tested on macOS 27 (git 2.50, Claude Code 2.1.286) and Debian 12 in Docker on arm64 (Claude Code 2.1.301 started in the sandbox), with srt 0.0.78.

@@ -1,12 +1,12 @@
 # claude-secure-sandbox: sandboxed directory
 
-You are running inside claude-secure-sandbox, an OS-level sandbox. You work directly in this directory, and can read and write it:
+You are running inside claude-secure-sandbox, an OS-level sandbox. @ACCESS@
 
 - `@ROOT@`
 
 The sandbox:
 
-- The rest of the machine is unreadable by design: the home directory, other projects, temp directories, credentials. System directories and installed tools can be read and run. Do not try to get around the sandbox; trying wastes time.
+- Outside this directory, the machine is unreadable by design: the home directory, other projects, temp directories, credentials. System directories and installed tools can be read and run. Do not try to get around the sandbox; trying wastes time.
 - Network access is limited to an allowlist of domains, with no git host. There is no git credential and no SSH agent: do not try `git push`, `git pull` or `git fetch`.
 
 Git workflow:

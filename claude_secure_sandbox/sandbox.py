@@ -393,6 +393,30 @@ def write_tool_links(ctx: Context) -> None:
         os.chmod(target, 0o755)
 
 
+def _read_root(ctx: Context) -> List[str]:
+    """Paths that make the session's directory readable. When it holds the
+    wrapper's state (a session started in the home directory), the branch that
+    leads to the state is left out and its siblings are allowed one by one: on
+    Linux, a read-only bind of the whole directory would cover the writable
+    mounts of tmp/ and claude-home inside it; on macOS, the deny of the state
+    would win over their allow."""
+    if ctx.work == ctx.state_root or not path_within(ctx.work, ctx.state_root):
+        return [ctx.work]
+    paths = []
+    current = ctx.work
+    for part in os.path.relpath(ctx.state_root, ctx.work).split("/"):
+        if platform.system() == "Darwin" and current != "/":
+            # The directory itself, for listing it: an exact-match glob.
+            paths.append(current[:-1] + "[" + current[-1] + "]")
+        try:
+            entries = os.listdir(current)
+        except OSError:
+            entries = []
+        paths += [os.path.join(current, e) for e in entries if e != part]
+        current = os.path.join(current, part)
+    return paths
+
+
 def write_srt_settings(ctx: Context) -> None:
     home = os.environ["HOME"]
     denied = denied_domains(ctx)
@@ -425,20 +449,31 @@ def write_srt_settings(ctx: Context) -> None:
 
     # Everything is unreadable, except what is re-allowed below; the specific
     # denies still win over a broader allow.
-    deny_read = ["/", home, os.path.dirname(home), ctx.state_root, ctx.state,
-                 ctx.archive] + volume_roots() + other_sessions(ctx)
-    if not ctx.directory_mode:
-        deny_read += [ctx.dev_root, ctx.dev_git_common]
+    # The wrapper's state, except what the session needs: its Claude
+    # configuration and its own directory (run/, tmp/, the copy). A deny that
+    # covered them would win over their allow when the home directory is
+    # readable (read_only_root).
+    deny_read = ["/", ctx.state, ctx.archive] + volume_roots() + other_sessions(ctx)
+    deny_read += [os.path.join(ctx.state_root, e) for e in sorted(os.listdir(ctx.state_root))
+                  if os.path.join(ctx.state_root, e) not in (ctx.claude_home, ctx.repo_dir)]
+    # Old transcripts may hold protected code read outside the sandbox.
+    deny_read += [os.path.join(home, ".claude", item) for item in PRIVATE_CLAUDE_ITEMS]
+    if ctx.directory_mode:
+        # The home directory is readable only when the session's directory
+        # holds it (read_only_root): a deny inside an allow would win.
+        deny_read += [d for d in (home, os.path.dirname(home)) if not path_within(ctx.work, d)]
+    else:
+        deny_read += [home, os.path.dirname(home), ctx.dev_root, ctx.dev_git_common]
     deny_read += SYSTEM_DENY.get(platform.system(), [])
-    allow_read = [ctx.work, ctx.tmp, ctx.run_dir, ctx.claude_home,
+    allow_read = _read_root(ctx) + [ctx.tmp, ctx.run_dir, ctx.claude_home,
                   os.path.join(ctx.root, "libexec"), claude_dir] + extra_read
     allow_read += _system_read_paths(secrets)
     # ~/.claude configuration items, passed through read only (sync_claude_config).
     allow_read += ctx.config_read
     # srt's helpers (the seccomp filter on Linux) run inside the sandbox.
     allow_read.append(os.path.join(os.path.dirname(os.path.dirname(realpath(ctx.srt))), "vendor"))
-    allow_write = [ctx.work, ctx.tmp, ctx.claude_home] + extra_write
-    deny_write = [os.path.join(ctx.copy_git, p) for p in LOCKED_GIT_PATHS]
+    allow_write = ([] if ctx.read_only_root else [ctx.work]) + [ctx.tmp, ctx.claude_home] + extra_write
+    deny_write = [] if ctx.read_only_root else [os.path.join(ctx.copy_git, p) for p in LOCKED_GIT_PATHS]
     deny_write.append(os.path.join(ctx.work, PROTECT_FILE))
     deny_write += [os.path.join(ctx.work, p) for p in ctx.protected]
     if platform.system() == "Linux":
@@ -450,7 +485,7 @@ def write_srt_settings(ctx: Context) -> None:
         # renamed or removed, so writable directories need no anchor.
         # Protected paths, absent from the copy, are created as empty
         # directories for the same reason (git ignores empty directories).
-        if os.path.isdir(ctx.copy_git) and not os.path.islink(ctx.copy_git):
+        if not ctx.read_only_root and os.path.isdir(ctx.copy_git) and not os.path.islink(ctx.copy_git):
             targets = [os.path.join(ctx.copy_git, d) for d in LOCKED_GIT_DIRS]
             targets += [os.path.join(ctx.work, p) for p in ctx.protected]
             for d in targets:
@@ -509,8 +544,12 @@ def neutralize_git_files(ctx: Context, before: List[str]) -> None:
 def write_system_prompt(ctx: Context) -> None:
     name = "directory-mode.md" if ctx.directory_mode else "protected-mode.md"
     template = read_text(os.path.join(ctx.root, "share", "prompts", name))
+    access = ("You work in this directory, which holds the developer's home directory. You can read it, "
+              "but not write it: write files in the temporary directory ($TMPDIR), and give the developer "
+              "the changes or commands to apply them:" if ctx.read_only_root
+              else "You work directly in this directory, and can read and write it:")
     template = (template.replace("@PLACEHOLDER@", PLACEHOLDER_TEXT).replace("@PROTECT_FILE@", PROTECT_FILE)
-                .replace("@ROOT@", ctx.work))
+                .replace("@ROOT@", ctx.work).replace("@ACCESS@", access))
     paths = "\n".join(f"- `{p}`" for p in ctx.protected)
     lines = [paths if line == "@PROTECTED_PATHS@" else line for line in template.split("\n")]
     write_text(os.path.join(ctx.run_dir, "system-prompt.md"), "\n".join(lines))
@@ -518,7 +557,8 @@ def write_system_prompt(ctx: Context) -> None:
 
 def _session_label(ctx: Context) -> str:
     if ctx.directory_mode:
-        return f"directory {os.path.basename(ctx.work)}"
+        name = ctx.work if ctx.read_only_root else os.path.basename(ctx.work)
+        return f"directory {name}" + (" (read only)" if ctx.read_only_root else "")
     branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
     return f"protected repository {os.path.basename(ctx.dev_root)} · {branch}"
 

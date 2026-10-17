@@ -14,7 +14,7 @@ from .common import (NAME, PROTECT_FILE, Git, ask, die, log, path_within, read_l
 _PATTERN_CHARS = set("*?[\\")
 
 
-def find_nested_protect_files(root: str) -> List[str]:
+def find_nested_protect_files(root: str, one_file_system: bool = False) -> List[str]:
     """Protection files under root, other than root/.claudeprotected."""
     home = os.environ["HOME"]
     # fd is installed as fdfind on Debian and Ubuntu.
@@ -23,6 +23,8 @@ def find_nested_protect_files(root: str) -> List[str]:
         cmd = [fd, "-H", "-I", "-t", "f", "--exclude", ".git", "--exclude", "node_modules"]
         if root == home:
             cmd += ["--exclude", "Library"]
+        if one_file_system:
+            cmd += ["--one-file-system"]
         cmd += ["^\\." + PROTECT_FILE[1:] + "$", root]
     elif shutil.which("rg"):
         cmd = ["rg", "--files", "--hidden", "--no-ignore", "--no-messages",
