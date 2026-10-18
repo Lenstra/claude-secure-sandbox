@@ -203,7 +203,7 @@ The first launch with a new `.claudesandbox` asks the same way for every entry. 
 
 **Hiding one entry of a visible directory.** Patterns and exceptions are not supported: list the other entries of the directory instead of the directory itself. That asks nothing, since they lie under a confirmed entry. Files added to that directory later are then hidden until they are listed.
 
-**New files.** In the copy, the paths outside `[visible]` are outside the sparse checkout: `git add` refuses a new file there. Claude asks the developer to list the path.
+**New paths.** Claude can create and commit files at paths that never existed in the developer's history, a `Makefile` at the root or a new directory. The developer fetches them as usual; once merged, they are hidden from Claude like any path outside `[visible]`, until the developer lists them and confirms. Writing into an existing hidden directory stays denied, and `git add` refuses a path that was hidden at some point.
 
 ### `[path]` and `[domain]`
 
@@ -239,7 +239,7 @@ The copy is a git repository built by the wrapper from the developer's local rep
 4. **Placeholders.** Each hidden content is replaced, in the copy only, by the one-line blob `[claude-secure-sandbox] hidden by .claudesandbox`, through git replace refs (`refs/replace/<hidden oid>`). `git log -p`, `git show` and `git blame` keep working. If Claude deletes some replace refs, all of them are recreated at the next launch.
 5. **Promisor remote that serves nothing.** The copy's promisor remote is `csnull::host`, handled by `libexec/git-remote-csnull`: it lists no branch and answers every fetch with "success, nothing to send". git never fetches a missing content, and diffs do not fail. Only the wrapper's own fetch redirects `csnull::host` to the developer's repository, for that command only.
 6. **Branches.** The copy's branches are updated from `refs/incoming/`, which is then deleted (section 8): the developer's branches become plain branches of the copy, under their own names.
-7. **Sparse checkout.** Non-cone sparse checkout includes the `[visible]` paths only, and excludes the visible files whose content is hidden at the checked-out commit. They are absent from disk: a placeholder on disk could be edited and committed by mistake. At a new session, the wrapper lists the public files absent for that reason, once per file (`state/reported-absent`).
+7. **Sparse checkout.** Non-cone sparse checkout includes everything except every path ever hidden in the developer's history (kept in `state/hidden-paths`, grouped as high in the tree as possible) and the visible files whose content is hidden at the checked-out commit. The hidden content is already absent from the copy: these patterns keep git from looking for it, and let Claude add files at new paths. They are absent from disk: a placeholder on disk could be edited and committed by mistake. At a new session, the wrapper lists the public files absent for that reason, once per file (`state/reported-absent`).
 
 ### Copy configuration
 
@@ -730,7 +730,7 @@ Run the tests with `npm test` (`jq` is needed by the end-to-end suite), and on L
 - no protected content in objects or on disk, including moved files, identical copies and branches merged with `-s ours`; placeholders; absent public files reported once;
 - `git fetch claude` and `git pull`, a commit referencing hidden content, signing by the developer's rebase;
 - the branch choice at a new session (Claude ahead, integrated after a rebase, diverged with each answer), the developer's other branches (kept, updated, deleted), resume;
-- `[visible]` widened by Claude (no terminal, refused, confirmed, hidden again), narrowed without a question, the section removed, tampering with `.git`, planted links;
+- `[visible]` widened by Claude (no terminal, refused, confirmed, hidden again), narrowed without a question, the section removed, a new path created by Claude then listed by the developer, tampering with `.git`, planted links;
 - directory mode, with the protected repository elsewhere hidden and named on the start screen; a protected repository below the launch directory hidden and not written; the home directory readable but not writable, with credentials, protected repositories, old transcripts and the wrapper's state hidden there; a launch from `/`, read only, with protected repositories hidden;
 - the machine scan finding protected repositories, including one never opened with the wrapper, and skipping the wrapper's copies;
 - Claude Code's login and temp root, the configuration passed through read only, the synced plugins the sandbox's own, the MCP servers, onboarding and trust copied, launch cases, and refused `.claudesandbox` entries;

@@ -26,7 +26,7 @@ The sandbox:
 Git workflow:
 
 - Commit your work on the current branch, or on a new branch. The developer fetches your branches directly from this copy (`git fetch claude`) and reviews them before merging.
-- Do not create files under hidden paths, nor modify `@SANDBOX_FILE@`: a change to it has no effect until the developer confirms it outside the sandbox. Outside the `[visible]` paths, `git add` refuses new files (sparse checkout): ask the developer to list the path instead.
+- Do not create files under hidden paths, nor modify `@SANDBOX_FILE@`: a change to it has no effect until the developer confirms it outside the sandbox. You can create files at new paths (a `Makefile` at the root, a new directory): once the developer has merged them, they are hidden from you too, until the developer lists them under `[visible]`; tell the developer which paths to add.
 - In `.git`, the configuration and hooks are read-only. Commits, branches and the rest of git work as usual.
 - Do not set up commit signing: there is no signing key in the sandbox. The developer signs your commits when integrating them.
 - The developer's branches are local branches of this copy. They are updated at each launch, except a branch that holds commits of yours the developer has not integrated yet. Commits the developer makes during the session appear at the next launch.

@@ -10,9 +10,9 @@ import subprocess
 from typing import List, Set, Tuple
 
 from .common import (EMPTY_BLOB, NULL_OID, PLACEHOLDER_TEXT, SANDBOX_FILE, GitError,
-                     die, log, read_lines, stamp, warn, write_lines, write_text)
+                     die, log, path_within, read_lines, stamp, warn, write_lines, write_text)
 from .context import Context
-from .protect import is_visible, sparse_escape
+from .protect import hidden_roots, is_visible, sparse_escape
 
 _FILE_MODES = ("100644", "100755", "120000")
 
@@ -94,7 +94,7 @@ def init_copy(ctx: Context) -> None:
     for key, value in settings:
         ctx.git_copy.out("config", key, value)
     write_text(os.path.join(ctx.copy_git, "info", "sparse-checkout"), "/*\n")
-    for f in ("host-tips", "protected-blobs"):
+    for f in ("host-tips", "protected-blobs", "hidden-paths"):
         write_text(ctx.state_file(f), "")
     ctx.placeholder = _hash_placeholder(ctx, write=True)
 
@@ -129,7 +129,7 @@ def _log_protected_paths(ctx: Context, revs: List[str]) -> str:
     it."""
     specs = [":/"] + [f":(top,exclude,literal){p}" for p in [SANDBOX_FILE] + ctx.visible]
     return ctx.git_dev.out(
-        "-c", "diff.renames=false", "-c", "log.showSignature=false",
+        "-c", "diff.renames=false", "-c", "log.showSignature=false", "-c", "core.quotePath=false",
         "log", "--stdin", "--format=", "--raw", "--no-abbrev", "--no-renames", "--root",
         "--full-history", "--diff-merges=first-parent", "--no-ext-diff", "--", *specs,
         input="".join(r + "\n" for r in revs))
@@ -137,19 +137,22 @@ def _log_protected_paths(ctx: Context, revs: List[str]) -> str:
 
 def scan_protected_blobs(ctx: Context, tips: List[str]) -> Set[str]:
     """Fingerprints of every content that existed under a hidden path, in
-    the commits that are new since the last scan. Added to
-    state/protected-blobs; returns the blobs found by this scan."""
+    the commits that are new since the last scan, added to
+    state/protected-blobs, and those paths, added to state/hidden-paths.
+    Returns the blobs found by this scan."""
     old = read_lines(ctx.state_file("host-tips"))
     revs = tips + ["^" + t for t in old]
     try:
         raw = _log_protected_paths(ctx, revs)
     except GitError:
         die("cannot scan the developer's history")
-    found = set()
+    found, paths = set(), set()
     for line in raw.splitlines():
         if not line.startswith(":"):
             continue
-        fields = line.split("\t", 1)[0].split()
+        meta, _, path = line.partition("\t")
+        paths.add(path)
+        fields = meta.split()
         old_mode, new_mode, old_oid, new_oid = fields[0][1:], fields[1], fields[2], fields[3]
         if old_mode in _FILE_MODES:
             found.add(old_oid)
@@ -158,6 +161,9 @@ def scan_protected_blobs(ctx: Context, tips: List[str]) -> Set[str]:
     found -= {NULL_OID, EMPTY_BLOB}
     known = set(read_lines(ctx.state_file("protected-blobs")))
     write_lines(ctx.state_file("protected-blobs"), sorted(known | found))
+    known_paths = set(read_lines(ctx.state_file("hidden-paths")))
+    if not paths <= known_paths:
+        write_lines(ctx.state_file("hidden-paths"), sorted(known_paths | paths))
     return found
 
 
@@ -333,7 +339,7 @@ def archive_copy(ctx: Context, reason: str) -> None:
                 os.makedirs(os.path.join(dest, "file-history"), exist_ok=True)
                 os.rename(history, os.path.join(dest, "file-history", sid))
         os.rename(enc, os.path.join(dest, "projects"))
-    for f in ("host-tips", "protected-blobs", "protect-hash"):
+    for f in ("host-tips", "protected-blobs", "hidden-paths", "protect-hash"):
         try:
             os.unlink(ctx.state_file(f))
         except FileNotFoundError:
@@ -344,18 +350,28 @@ def archive_copy(ctx: Context, reason: str) -> None:
 
 
 def write_sparse_patterns(ctx: Context, commit: str) -> List[str]:
-    """Sparse-checkout patterns: the [visible] paths, except files whose
-    content is hidden at the given commit. Returns those files."""
+    """Sparse-checkout patterns: everything, except every path ever hidden in
+    the developer's history (as high in the tree as possible), and the files
+    whose content is hidden at the given commit. What Claude cannot read is
+    already absent from the copy: these patterns keep git from looking for
+    it, and let Claude add files at new paths (a Makefile at the root), which
+    the developer can then list in [visible]. Returns the visible files whose
+    content is hidden."""
     hidden = set(read_lines(ctx.state_file("protected-blobs")))
-    lines = [f"/{sparse_escape(p)}" for p in [SANDBOX_FILE] + ctx.visible]
+    roots, _ = hidden_roots(ctx.visible, read_lines(ctx.state_file("hidden-paths")))
+    lines = ["/*"] + [f"!/{sparse_escape(r)}" for r in roots]
     public = []
     for entry in ctx.git_copy.out("ls-tree", "-r", "-z", commit).split("\0"):
         if not entry:
             continue
         meta, path = entry.split("\t", 1)
-        if meta.split(" ")[2] in hidden and is_visible(ctx.visible, path):
+        if meta.split(" ")[2] not in hidden:
+            continue
+        if is_visible(ctx.visible, path):
             lines.append(f"!/{sparse_escape(path)}")
             public.append(path)
+        elif not any(path_within(r, path) for r in roots):
+            lines.append(f"!/{sparse_escape(path)}")
     target = os.path.join(ctx.copy_git, "info", "sparse-checkout")
     write_lines(target + ".tmp", lines)
     os.replace(target + ".tmp", target)

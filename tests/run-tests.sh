@@ -492,6 +492,28 @@ run_claude "$T/fakebin/s-hidden.sh"
 collect
 check "confirmation dropped when hidden again" sh -c "! grep -qx secret '$D/.git/claude-secure-sandbox/visible'"
 
+section "a new path created by Claude, listed later by the developer"
+cat > "$T/fakebin/s-newpath.sh" <<'EOF'
+echo "all:" > Makefile && mkdir -p scripts && echo "NEW-SCRIPT" > scripts/build.sh
+if git add Makefile scripts/build.sh && git commit -qm "build scripts"; then echo "IN-OK Claude commits files at new paths"; else echo "IN-FAIL Claude commits files at new paths"; fi
+if mkdir -p secret 2>/dev/null && echo x > secret/new.txt 2>/dev/null; then echo "IN-FAIL a hidden directory stays write-locked"; else echo "IN-OK a hidden directory stays write-locked"; fi
+EOF
+run_claude "$T/fakebin/s-newpath.sh"
+collect
+git -C "$D" pull -q --ff-only claude main
+check "the developer got the new files" sh -c "grep -q NEW-SCRIPT '$D/scripts/build.sh' && test -f '$D/Makefile'"
+cat > "$T/fakebin/s-newpath-hidden.sh" <<'EOF'
+if [ -e Makefile ] || [ -e scripts/build.sh ]; then echo "IN-FAIL merged, not listed: hidden"; else echo "IN-OK merged, not listed: hidden"; fi
+EOF
+run_claude "$T/fakebin/s-newpath-hidden.sh"
+collect
+( cd "$D" && printf '[visible]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\nMakefile\nscripts\n' > "$PF" && git commit -qam "show the build scripts" )
+cat > "$T/fakebin/s-newpath-visible.sh" <<'EOF'
+if grep -q NEW-SCRIPT scripts/build.sh 2>/dev/null && [ -f Makefile ]; then echo "IN-OK listed and confirmed: visible"; else echo "IN-FAIL listed and confirmed: visible"; fi
+EOF
+run_claude_answer y "$T/fakebin/s-newpath-visible.sh"
+collect
+
 # --- escape attempts ------------------------------------------------------------------
 
 section "escape attempts: getting a program outside the sandbox to run something"
