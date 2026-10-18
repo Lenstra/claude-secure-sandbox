@@ -1,0 +1,101 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Unit tests and static checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # The oldest Python the tool supports.
+          python-version: "3.9"
+      - name: Python compiles on 3.9
+        run: |
+          python -m compileall -q claude_secure_sandbox tests
+          python -m py_compile bin/claude bin/claude-unsandboxed
+      - name: pyflakes
+        run: |
+          pip install --quiet pyflakes
+          python -m pyflakes claude_secure_sandbox bin/claude bin/claude-unsandboxed tests/*.py
+      - name: Unit tests
+        run: python tests/test_unit.py
+      - name: shellcheck
+        run: shellcheck --severity=error install.sh uninstall.sh tests/run-tests.sh
+      - name: The srt terminal script parses
+        run: node --check libexec/srt-own-terminal.mjs
+
+  macos:
+    name: End-to-end, macOS
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: brew install ripgrep fd
+      - run: npm ci
+      - name: Claude Code, for the test in a real terminal
+        run: npm install --global @anthropic-ai/claude-code
+      - name: End-to-end tests in the real sandbox
+        run: npm test
+      - name: Claude Code's interface reads keys in the sandbox
+        run: python3 tests/tui-smoke.py
+
+  debian:
+    name: End-to-end, Debian (Docker)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run test:linux
+
+  ubuntu:
+    name: End-to-end, Ubuntu 24.04
+    runs-on: ubuntu-24.04
+    env:
+      # Tests outside /tmp: the sandbox hides it.
+      TMPDIR: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep fd-find jq
+      - run: npm ci
+      - name: Nothing runs while AppArmor restricts user namespaces
+        # Ubuntu 24.04 strips capabilities from unprivileged user namespaces,
+        # which bubblewrap needs: the session must fail, never run Claude
+        # outside the sandbox.
+        run: |
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" != 1 ]; then
+            echo "restriction not enabled on this runner: nothing to check"; exit 0
+          fi
+          printf '#!/bin/sh\necho CLAUDE-RAN\n' > "$RUNNER_TEMP/claude" && chmod +x "$RUNNER_TEMP/claude"
+          mkdir -p "$RUNNER_TEMP/plain" && cd "$RUNNER_TEMP/plain"
+          status=0
+          out=$(PATH="$GITHUB_WORKSPACE/bin:$RUNNER_TEMP:$PATH" CLAUDE_SECURE_SANDBOX_SCAN=limited claude 2>&1 < /dev/null) || status=$?
+          echo "$out"
+          rm "$RUNNER_TEMP/claude"
+          if echo "$out" | grep -q CLAUDE-RAN; then echo "Claude ran"; exit 1; fi
+          test "$status" -ne 0
+      - name: Lift the restriction, as the README says
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Claude Code, for the test in a real terminal
+        run: npm install --global @anthropic-ai/claude-code
+      - name: End-to-end tests in the real sandbox
+        run: npm test
+      - name: Claude Code's interface reads keys in the sandbox
+        run: python3 tests/tui-smoke.py

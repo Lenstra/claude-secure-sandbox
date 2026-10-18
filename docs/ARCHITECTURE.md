@@ -714,9 +714,13 @@ share/config.example.json                   configuration example
 install.sh                                  dependency check and npm ci
 uninstall.sh                                lists what to remove to uninstall, with the commands
 tests/run-tests.sh                          end-to-end tests
+tests/tui-smoke.py                          the real Claude Code in a terminal, in the sandbox: its interface reads keys
+.github/workflows/tests.yml                 CI: static checks, macOS, Debian (Docker), Ubuntu 24.04
 tests/test_unit.py                          unit tests of the pure functions
 tests/linux/Dockerfile                      Linux test environment (Debian, bubblewrap)
 ```
+
+The CI (`.github/workflows/tests.yml`) runs on every push to `main` and every pull request: Python 3.9 compilation, pyflakes, unit tests, shellcheck; the end-to-end suite and `tests/tui-smoke.py` on macOS and on Ubuntu 24.04; the suite in the Debian image. On Ubuntu 24.04 it first checks that, while AppArmor restricts user namespaces, the session fails without running Claude, then lifts the restriction as the README says.
 
 Run the tests with `npm test` (`jq` is needed by the end-to-end suite), and on Linux in Docker with `npm run test:linux`; the Docker image sets `TMPDIR` outside `/tmp`, because the sandbox hides `/tmp` when protected code exists. The end-to-end tests set `CLAUDE_SECURE_SANDBOX_SCAN=limited`, and test the scan itself separately. Their temp directory holds protected repositories, which the machine scan of every later session would find: it is removed even after a failure or an interruption, unless `CS_TEST_KEEP=1` or `CS_TEST_DIR` is set. The unit tests cover `.claudesandbox` parsing and validation, path helpers, domain matching and URL parsing. The end-to-end tests create a fake `HOME`, a test repository, a fake keychain and a fake `claude` binary that runs scenarios inside the real `srt` sandbox. They cover:
 
