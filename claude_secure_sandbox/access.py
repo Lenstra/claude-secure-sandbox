@@ -122,11 +122,12 @@ def secrets(ctx: Context) -> List[str]:
     """Paths nothing may open: credentials, Claude's transcripts and login,
     the temp directories, the wrapper's state and protected code."""
     home = os.environ["HOME"]
-    paths = [ctx.state_root, os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
-    paths += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + user_temp_dirs()
-    paths += ctx.protected_elsewhere
+    # Protected code first: it is the reason given when a path overlaps several.
+    paths = list(ctx.protected_elsewhere)
     if not ctx.directory_mode:
         paths += [ctx.dev_root, ctx.dev_git_common]
+    paths += [ctx.state_root, os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
+    paths += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + user_temp_dirs()
     return paths
 
 

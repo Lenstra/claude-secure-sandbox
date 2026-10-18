@@ -760,12 +760,19 @@ A=$T/plain/access
 # A path to open, outside the temp directories (which .claudesandbox cannot
 # open, and where the test directory lives on macOS).
 SDK=$ROOT/share/prompts
+# Another protected repository, by its path, a folder inside it, and a link to it.
+ln -s "$D" "$T/link-to-protected"
 mkdir -p "$A" && git init -q "$A" && git -C "$A" commit -q --allow-empty -m init
 ACCESS_SETTINGS=$STATE_ROOT/access-$(python3 -c 'import hashlib, sys; print(hashlib.sha1(sys.argv[1].encode()).hexdigest()[:10])' "$A")/run/srt-settings.json
-for entry in "[allowed-domain]\ngithub.com" "[allowed-domain]\napi.githubcopilot.com" "[allowed-domain]\napi.github.com" "[allowed-domain]\n*.com" "[allowed-domain]\nlocalhost:5037" "[allowed-domain]\n127.0.0.1" "[allowed-external]\n~/.ssh" "[allowed-external]\n~/.claude" "[allowed-external]\n/tmp" "[allowed-external]\n$STATE_ROOT" "[allowed-external]\n~"; do
+for entry in "[allowed-domain]\ngithub.com" "[allowed-domain]\napi.githubcopilot.com" "[allowed-domain]\napi.github.com" "[allowed-domain]\n*.com" "[allowed-domain]\nlocalhost:5037" "[allowed-domain]\n127.0.0.1" "[allowed-external]\n~/.ssh" "[allowed-external]\n~/.claude" "[allowed-external]\n/tmp" "[allowed-external]\n$STATE_ROOT" "[allowed-external]\n~" "[allowed-external]\n$D" "[allowed-external]\n$D/src" "[allowed-external]\n$T/link-to-protected"; do
   printf "$entry\n" > "$A/$PF"
   ( cd "$A" && claude ) < /dev/null > "$T/out/last" 2>&1
   check "refused: $(printf "$entry" | tr '\n' ' ')" sh -c "grep -q 'not allowed\|too broad' '$T/out/last' && ! grep -q '^SANDBOXED' '$T/out/last'"
+done
+for p in "$D/src" "$T/link-to-protected"; do
+  printf "[allowed-external]\n$p\n" > "$A/$PF"
+  ( cd "$A" && claude ) < /dev/null > "$T/out/last" 2>&1
+  check "refused because of the protected repository: $p" grep -q "overlaps $D\$" "$T/out/last"
 done
 printf "[allowed-external]\n$SDK\n\n[allowed-domain]\nregistry.npmjs.org\n" > "$A/$PF"
 ( cd "$A" && claude ) < /dev/null > "$T/out/last" 2>&1
