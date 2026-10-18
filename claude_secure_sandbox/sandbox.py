@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import ipaddress
 import json
 import os
 import platform
@@ -82,8 +83,30 @@ def allowed_domains(ctx: Context, denied: List[str]) -> List[str]:
             die('allowed_domains cannot contain "*"')
         if d in denied:
             die(f"git host not allowed in allowed_domains: {d}")
+        if local_destination(d):
+            die(f"this computer is not allowed in allowed_domains: {d}")
         allowed.add(d)
     return sorted(allowed)
+
+
+def local_destination(entry: str) -> bool:
+    """An allowed_domains entry that designates this computer: localhost, a
+    loopback, unspecified or link-local address. A service listening there
+    (an MCP server, an adb or Docker daemon, a dev server) runs outside the
+    sandbox: reached through srt's proxy, it would read for Claude what the
+    sandbox hides. srt already refuses a name that resolves there."""
+    host = entry
+    if host.startswith("["):
+        host = host[1:host.find("]")]
+    elif host.count(":") == 1:
+        host = host.split(":")[0]
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified or address.is_link_local
 
 
 def copy_dependency_dirs(ctx: Context) -> None:

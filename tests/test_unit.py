@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from claude_secure_sandbox.common import path_within  # noqa: E402
 from claude_secure_sandbox.protect import is_protected_path, normalize, sparse_escape  # noqa: E402
-from claude_secure_sandbox.sandbox import url_host  # noqa: E402
+from claude_secure_sandbox.sandbox import local_destination, url_host  # noqa: E402
 
 
 class NormalizeTest(unittest.TestCase):
@@ -75,6 +75,20 @@ class UrlHostTest(unittest.TestCase):
         for url in ("/srv/repo.git", "./repo", "../repo", "file:///srv/repo", "repo"):
             with self.subTest(url=url):
                 self.assertEqual(url_host(url), "")
+
+
+class LocalDestinationTest(unittest.TestCase):
+    def test_this_computer(self):
+        for entry in ("localhost", "*.localhost", "app.localhost:3000", "127.0.0.1", "127.1.2.3:5037",
+                      "::1", "[::1]:8080", "0.0.0.0", "169.254.169.254", "[fe80::1]"):
+            with self.subTest(entry=entry):
+                self.assertTrue(local_destination(entry))
+
+    def test_other_hosts(self):
+        for entry in ("api.anthropic.com", "registry.npmjs.org:443", "*.example.com", "10.0.0.5",
+                      "192.168.1.10", "localhost.example.com"):
+            with self.subTest(entry=entry):
+                self.assertFalse(local_destination(entry))
 
 
 if __name__ == "__main__":

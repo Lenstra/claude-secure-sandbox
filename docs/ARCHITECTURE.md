@@ -286,6 +286,7 @@ The Seatbelt profile is attached to the process by the kernel and inherited by e
 | Linux: `systemd-run --user`, `xdg-open`, the D-Bus session bus | denied: no Unix socket is reachable |
 | SSH agent and other Unix sockets | denied |
 | TCP to `localhost` | denied: only the `srt` proxy is reachable (`allowLocalBinding: false`) |
+| a program running outside the sandbox that acts on request: an MCP server, an `adb` or Docker daemon, a dev server, here a helper that serves a protected file over localhost TCP and a Unix socket | unreachable: directly, through the proxy (by address or by `localhost`) and through its socket; `allowed_domains` refuses this computer (`localhost`, loopback, unspecified and link-local addresses), and `srt` refuses an allowed name that resolves to it |
 | macOS: reading or writing another terminal of the developer (`/dev/ttys*`), to catch what is typed there | denied: terminal access is limited to Claude's own terminal |
 | writing `~/.zshrc`, a LaunchAgent, an autostart entry, the `xcrun` cache | the real files are never written |
 | a detached process after the session | macOS: still confined, it cannot read what the session could not (credentials, here) and loses the network when `srt` exits; Linux: ended with the session |
@@ -312,7 +313,7 @@ MCP servers live in `~/.claude.json`, which is Claude Code's state rather than c
 
 ### Network
 
-`srt` routes traffic through a filtering proxy. Allowed: the Anthropic domains (`api.anthropic.com`, `claude.ai`, `platform.claude.com`, `console.anthropic.com`, `statsig.anthropic.com`, `mcp-proxy.anthropic.com`) and the domains added in the configuration. Always denied: GitHub, GitLab, Bitbucket, Azure DevOps, Codeberg, SourceForge, and the hosts of the repository's remotes. A configuration that allows one of them, or `*`, is refused.
+`srt` routes traffic through a filtering proxy. Allowed: the Anthropic domains (`api.anthropic.com`, `claude.ai`, `platform.claude.com`, `console.anthropic.com`, `statsig.anthropic.com`, `mcp-proxy.anthropic.com`) and the domains added in the configuration. Always denied: GitHub, GitLab, Bitbucket, Azure DevOps, Codeberg, SourceForge, and the hosts of the repository's remotes. A configuration that allows one of them, or `*`, is refused, and so is one that allows this computer: `localhost`, `*.localhost`, a loopback, unspecified or link-local address. A service listening there runs outside the sandbox; reached through the proxy, it could read for Claude what the sandbox hides (an MCP server able to run `adb`, for instance). `srt` itself refuses an allowed name whose address is this computer's.
 
 ### Environment and git configuration
 

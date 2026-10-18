@@ -541,6 +541,45 @@ check_not "after the session it still cannot read the home" grep -q read-home "$
 check_not "after the session it has no network" grep -q network "$COPY/tmp/survivor"
 rm -f "$COPY/tmp/survivor" "$SOCK"
 
+section "relay: a process outside the sandbox that acts for Claude"
+# The incident this reproduces: an MCP server left running on the host could
+# run adb, and Claude used it to read a protected file through a phone. Here,
+# a helper on this computer serves the content of a protected file, over
+# localhost TCP and a Unix socket; the sandbox must not reach it by any route.
+cat > "$T/relay.py" <<'PY'
+import socket, sys, threading
+port, path, secret = int(sys.argv[1]), sys.argv[2], open(sys.argv[3], "rb").read()
+reply = b"HTTP/1.0 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(secret), secret)
+def serve(server):
+    while True:
+        conn, _ = server.accept()
+        try:
+            conn.recv(4096); conn.sendall(reply)
+        finally:
+            conn.close()
+tcp = socket.create_server(("127.0.0.1", port))
+unix = socket.socket(socket.AF_UNIX); unix.bind(path); unix.listen(5)
+threading.Thread(target=serve, args=(tcp,), daemon=True).start()
+serve(unix)
+PY
+RELAY_PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+RELAY_SOCK=$T/relay.sock
+python3 "$T/relay.py" "$RELAY_PORT" "$RELAY_SOCK" "$D/secret/s.txt" &
+relay_pid=$!
+sleep 1
+check "the helper serves the protected file outside the sandbox" sh -c "curl -s -m 3 --noproxy '*' http://127.0.0.1:$RELAY_PORT/ | grep -q SECRET-"
+cat > "$T/fakebin/s-relay.sh" <<EOF
+tn() { if "\$@" >/dev/null 2>&1; then echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi; }
+name="relay unreachable through the proxy";          tn sh -c 'curl -s -m 5 http://127.0.0.1:$RELAY_PORT/ | grep -q SECRET-'
+name="relay unreachable through the proxy, by name"; tn sh -c 'curl -s -m 5 http://localhost:$RELAY_PORT/ | grep -q SECRET-'
+name="relay unreachable directly";                   tn sh -c 'curl -s -m 5 --noproxy "*" http://127.0.0.1:$RELAY_PORT/ | grep -q SECRET-'
+name="relay unreachable through its Unix socket";    tn sh -c 'curl -s -m 5 --unix-socket "$RELAY_SOCK" http://x/ | grep -q SECRET-'
+EOF
+run_claude "$T/fakebin/s-relay.sh"
+collect
+kill $relay_pid 2>/dev/null; wait $relay_pid 2>/dev/null
+rm -f "$RELAY_SOCK"
+
 if [ "$OS" = Darwin ]; then
 section "terminal: Claude's own only"
 # Another terminal of the user, open while the session runs.
@@ -677,6 +716,11 @@ EOF
 out=$(cd "$D" && claude 2>&1)
 check "git host refused in the configuration" sh -c "printf '%s' '$out' | grep -q 'git host not allowed'"
 check_not "claude not started when the configuration is refused" sh -c "printf '%s' '$out' | grep -q '^SANDBOXED'"
+cat > "$T/config.json" <<EOF
+{ "claude_bin": "$T/fakebin/claude", "machine_scan": false, "network": { "allowed_domains": ["localhost:5037"] } }
+EOF
+out=$(cd "$D" && claude 2>&1)
+check "this computer refused in the configuration" sh -c "printf '%s' '$out' | grep -q 'this computer is not allowed'"
 cat > "$T/config.json" <<EOF
 { "claude_bin": "$T/fakebin/claude", "machine_scan": false, "filesystem": { "allow_read": ["~/.ssh/known_hosts"] } }
 EOF
