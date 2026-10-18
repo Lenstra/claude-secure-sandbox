@@ -53,11 +53,11 @@ for marker in "$STATE"/*/state/repository; do
     lines+="   git -C '$repo' remote remove claude"$'\n'
   common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
   [ -n "$common" ] && [ -d "$common/$NAME" ] &&
-    lines+="   rm -rf '$common/$NAME'      # your confirmed removals of protection"$'\n'
+    lines+="   rm -rf '$common/$NAME'      # what you confirmed Claude may see"$'\n'
   repos+="$lines"
 done
 if [ -n "$repos" ]; then
-  title "In each repository you used it in: the \"claude\" remote, and your confirmed removals of protection."
+  title "In each repository you used it in: the \"claude\" remote, and what you confirmed Claude may see."
   printf '%s' "$repos"
 fi
 

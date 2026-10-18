@@ -94,8 +94,8 @@ Next steps:
 
   3. Log in to Claude Code if you have not yet: claude-unsandboxed, then /login.
 
-  4. In each repository, list in .claudesandbox the paths to protect, and
-     the domains and paths Claude may reach beyond the defaults. See the README.
+  4. In each repository to protect, list in .claudesandbox what Claude may
+     see, read and reach. See the README.
 MSG
 if [ "$moved" = 1 ]; then
   echo

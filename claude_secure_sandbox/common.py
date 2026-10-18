@@ -14,8 +14,8 @@ import time
 from typing import Iterable, List, NoReturn, Optional
 
 NAME = "claude-secure-sandbox"
-# File at the repository root: protected paths, and what the sandbox may
-# reach beyond the defaults (paths to read, network domains).
+# File at the repository root: what Claude may see in the repository, read
+# and reach beyond the defaults (sandbox_file.py).
 SANDBOX_FILE = ".claudesandbox"
 # Protection file of earlier versions: still marks a protected repository.
 LEGACY_PROTECT_FILE = ".claudeprotected"

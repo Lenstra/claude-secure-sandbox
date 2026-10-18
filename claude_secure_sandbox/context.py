@@ -33,10 +33,11 @@ class Context:
         # Protected repositories other than the session's, entirely hidden.
         self.protected_elsewhere: List[str] = []
         # Directory mode in a directory that holds the home directory: read only.
-        self.read_only_root = False
+        self.home_session = False
         # Real paths of the ~/.claude items passed through to the sandbox.
         self.config_read: List[str] = []
-        # What the repository's .claudesandbox asks for, once confirmed.
+        # The .claudesandbox of dev_root, and what it asks for, once confirmed.
+        self.sandbox_file = None
         self.granted_paths: List[str] = []
         self.granted_domains: List[str] = []
         # srt's own temp directory, private to the session (sandbox.make_srt_tmp).

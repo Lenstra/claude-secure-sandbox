@@ -6,7 +6,7 @@ You are running inside claude-secure-sandbox, an OS-level sandbox. You work in a
 
 The copy holds only the paths the developer listed under `[visible]` in `@SANDBOX_FILE@`. Everything else is hidden from you, by design; at the current commit, that is:
 
-@PROTECTED_PATHS@
+@HIDDEN_PATHS@
 
 How this affects your work:
 

@@ -18,8 +18,8 @@ def protected_code_exists(ctx: Context) -> bool:
 
 def session_label(ctx: Context) -> str:
     if ctx.directory_mode:
-        name = ctx.work if ctx.read_only_root else os.path.basename(ctx.work)
-        return f"directory {name}" + (" (read only)" if ctx.read_only_root else "")
+        name = ctx.work if ctx.home_session else os.path.basename(ctx.work)
+        return f"directory {name}" + (" (read only)" if ctx.home_session else "")
     branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
     return f"protected repository {os.path.basename(ctx.dev_root)} · {branch}"
 
@@ -47,7 +47,7 @@ def confirm_session(ctx: Context) -> bool:
             f"Claude works on:     a copy of this repository, branch {branch}",
             "Your files:          untouched; get Claude's commits with: git fetch claude",
         ]
-    elif ctx.read_only_root:
+    elif ctx.home_session:
         intro = f"You started Claude in {display_path(ctx.work)}, which holds your home folder."
         lines = [
             "Claude can edit:     nothing there; it will tell you the changes to make",
@@ -57,7 +57,7 @@ def confirm_session(ctx: Context) -> bool:
         lines = [
             f"Claude can edit:     {display_path(ctx.work)}",
         ]
-    if not ctx.read_only_root:
+    if not ctx.home_session:
         lines.append("Claude can read:     the system and the tools on your PATH, not your other files")
         if ctx.granted_paths:
             granted = [display_path(p) for p in ctx.granted_paths]

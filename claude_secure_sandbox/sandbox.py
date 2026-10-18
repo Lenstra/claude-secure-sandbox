@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import glob
-import ipaddress
 import json
 import os
 import platform
@@ -14,38 +13,14 @@ import subprocess
 import tempfile
 from typing import List, Tuple
 
+from .access import (CREDENTIALS, TEMP_DIRS, USER_AREAS, allowed_domains, denied_domains, path_tools,
+                     user_temp_dirs)
+from .claude_config import PRIVATE_CLAUDE_ITEMS, claude_settings
 from .common import (NAME, PLACEHOLDER_TEXT, SANDBOX_FILE, die, ensure_real_dir, log, overlaps, path_within,
                      read_text, realpath, stamp, volume_roots, warn, write_text)
 from .context import Context
 from .filtered_copy import claude_project_dir
-from .claude_config import PRIVATE_CLAUDE_ITEMS, claude_settings
 from .screen import confirm_session, protected_code_exists
-
-DEFAULT_DOMAINS = [
-    "api.anthropic.com", "claude.ai", "platform.claude.com", "console.anthropic.com",
-    "statsig.anthropic.com", "mcp-proxy.anthropic.com",
-]
-
-# Git hosts that are always denied, on top of the hosts of the developer's remotes.
-GIT_HOSTS = [
-    "github.com", "*.github.com", "*.githubusercontent.com", "gitlab.com", "*.gitlab.com",
-    "bitbucket.org", "*.bitbucket.org", "dev.azure.com", "*.dev.azure.com",
-    "*.visualstudio.com", "codeberg.org", "sourceforge.net", "*.sourceforge.net",
-    # GitHub's MCP server, which reads the repositories GitHub hosts.
-    "githubcopilot.com", "*.githubcopilot.com",
-]
-
-# Where credentials live, relative to the home directory. When protected code
-# exists on the computer, they are hidden: they open the git servers that host
-# it.
-CREDENTIALS = [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker/config.json", ".netrc",
-               ".git-credentials", ".npmrc", ".pypirc", ".cargo/credentials.toml", ".config/gh",
-               ".config/hub", ".config/gcloud", ".password-store", "Library/Keychains",
-               ".local/share/keyrings"]
-TEMP_DIRS = ["/tmp", "/private/tmp", "/var/tmp"]
-# Where users' files live: unreadable by default, like the home directory,
-# the other disks and the temp directories.
-USER_AREAS = {"Darwin": ["/Users"], "Linux": ["/home", "/root"]}
 
 # Paths of the copy's .git that Claude must not write: the wrapper's git or
 # the developer's would read configuration, hooks or objects from there.
@@ -53,152 +28,18 @@ LOCKED_GIT_DIRS = ["hooks", "info", "objects/info", "modules", "worktrees"]
 LOCKED_GIT_FILES = ["config", "config.worktree", "commondir", "shallow"]
 LOCKED_GIT_PATHS = LOCKED_GIT_FILES + LOCKED_GIT_DIRS
 
-
-def url_host(url: str) -> str:
-    """Host of a git URL (https://h/x, ssh://u@h:22/x, u@h:x); empty for a local path."""
-    if "://" in url:
-        host = url.split("://", 1)[1].split("/", 1)[0].rsplit("@", 1)[-1]
-        host = host.split("]", 1)[0] + "]" if host.startswith("[") else host.split(":", 1)[0]
-    elif url.startswith(("/", "./", "../", "file:")):
-        return ""
-    elif ":" in url:
-        host = url.split(":", 1)[0].rsplit("@", 1)[-1]
-    else:
-        return ""
-    return host.lower()
-
-
-def denied_domains(ctx: Context) -> List[str]:
-    hosts = set(GIT_HOSTS)
-    remotes = ctx.git_dev.value("config", "--get-regexp", r"^remote\..*\.(url|pushurl)$")
-    for line in remotes.splitlines():
-        parts = line.split(" ", 1)
-        if len(parts) == 2:
-            host = url_host(parts[1])
-            if host:
-                hosts.add(host)
-    return sorted(hosts)
-
-
-def allowed_domains(ctx: Context) -> List[str]:
-    """The Anthropic domains, and those of the repository's .claudesandbox
-    that the developer confirmed (checked by check_access)."""
-    return sorted(set(DEFAULT_DOMAINS) | set(ctx.granted_domains))
-
-
-def check_access(ctx: Context, paths: List[str], domains: List[str]) -> Tuple[List[str], List[str]]:
-    """Refuses what a .claudesandbox may never open, before the developer is
-    asked: a git host, this computer, and paths that hold credentials,
-    protected code, Claude's transcripts, temp files or the wrapper's state."""
-    denied = denied_domains(ctx)
-    for d in domains:
-        if any(domains_overlap(d, h) for h in denied):
-            die(f"{SANDBOX_FILE}: git host not allowed in [domain]: {d}")
-        if local_destination(d):
-            die(f"{SANDBOX_FILE}: this computer is not allowed in [domain]: {d}")
-    for p in paths:
-        secret = _overlapped_secret(ctx, p)
-        if secret:
-            die(f"{SANDBOX_FILE}: [path] {p} not allowed, it overlaps {secret}")
-    return paths, domains
-
-
-def _secrets(ctx: Context) -> List[str]:
-    """Paths no allowance may open: credentials, Claude's transcripts and
-    login, the temp directories, the wrapper's state and protected code."""
-    home = os.environ["HOME"]
-    secrets = [ctx.state_root, os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
-    secrets += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + _user_temp_dirs()
-    secrets += ctx.protected_elsewhere
-    if not ctx.directory_mode:
-        secrets += [ctx.dev_root, ctx.dev_git_common]
-    return secrets
-
-
-def _overlapped_secret(ctx: Context, path: str) -> str:
-    for secret in _secrets(ctx):
-        if overlaps(path, secret) or overlaps(realpath(path), realpath(secret)):
-            return secret
-    return ""
-
-
-def path_tools(ctx: Context) -> List[str]:
-    """The tools on the developer's PATH, readable even inside the home
-    directory: each bin directory with its installation (~/.nvm/versions/
-    node/v22 for ~/.nvm/versions/node/v22/bin), never the home directory
-    itself, and never a directory that overlaps a secret."""
-    home = os.environ["HOME"]
-    own = {os.path.join(ctx.root, "bin"), os.path.join(ctx.root, "libexec"), os.path.join(ctx.run_dir, "bin")}
-    tools = []
-    for d in os.environ.get("PATH", "").split(":"):
-        if not d.startswith("/") or d in own or not os.path.isdir(d):
-            continue
-        real = realpath(d)
-        top = os.path.dirname(real) if os.path.basename(real) == "bin" else real
-        for candidate in (top, real):
-            if path_within(candidate, home) or _overlapped_secret(ctx, candidate):
-                continue
-            tools.append(candidate)
-            break
-    return tools
-
-
-def domains_overlap(a: str, b: str) -> bool:
-    """True if two domain entries (name or *.name, with an optional port)
-    can match the same host: *.name matches every name below it."""
-    def split(entry):
-        host = entry.rsplit(":", 1)[0] if entry.count(":") == 1 else entry
-        return (host[2:], True) if host.startswith("*.") else (host, False)
-    (ha, wa), (hb, wb) = split(a), split(b)
-    return (ha == hb or (wa and hb.endswith("." + ha)) or (wb and ha.endswith("." + hb))
-            or (wa and wb and (ha.endswith("." + hb) or hb.endswith("." + ha))))
-
-
-def local_destination(entry: str) -> bool:
-    """A [domain] entry that designates this computer: localhost, a
-    loopback, unspecified or link-local address. A service listening there
-    (an MCP server, an adb or Docker daemon, a dev server) runs outside the
-    sandbox: reached through srt's proxy, it would read for Claude what the
-    sandbox hides. srt already refuses a name that resolves there."""
-    host = entry
-    if host.startswith("["):
-        host = host[1:host.find("]")]
-    elif host.count(":") == 1:
-        host = host.split(":")[0]
-    if host == "localhost" or host.endswith(".localhost"):
-        return True
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return address.is_loopback or address.is_unspecified or address.is_link_local
-
-
-def other_sessions(ctx: Context) -> List[str]:
-    """Sessions of other repositories: unreadable from this sandbox."""
-    mine = claude_project_dir(ctx)
-    result = []
-    for d in sorted(glob.glob(os.path.join(ctx.claude_home, "projects", "*"))):
-        if not os.path.isdir(d) or d == mine:
-            continue
-        result.append(d)
-        for transcript in glob.glob(os.path.join(d, "*.jsonl")):
-            sid = os.path.basename(transcript)[:-len(".jsonl")]
-            history = os.path.join(ctx.claude_home, "file-history", sid)
-            if os.path.lexists(history):
-                result.append(history)
-    return result
-
-
-def _gitconfig_value(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
 # Files srt always write-protects; on Linux it covers each absent one with
 # /dev/null in every writable directory for the session.
 SRT_PROTECTED_FILES = [".gitconfig", ".gitmodules", ".bashrc", ".bash_profile", ".zshrc", ".zprofile",
                        ".profile", ".ripgreprc", ".mcp.json", ".vscode", ".idea", ".claude/commands",
                        ".claude/agents"]
+
+
+# --- files of the session ------------------------------------------------------
+
+
+def _gitconfig_value(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def write_gitconfig(ctx: Context) -> None:
@@ -239,88 +80,131 @@ def write_tool_links(ctx: Context) -> None:
         os.chmod(target, 0o755)
 
 
-def _user_temp_dirs() -> List[str]:
-    """macOS: the per-user temp and cache directories under /var/folders."""
-    if platform.system() != "Darwin":
-        return []
-    dirs = []
-    for name in ("DARWIN_USER_TEMP_DIR", "DARWIN_USER_CACHE_DIR"):
-        proc = subprocess.run(["getconf", name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              encoding="utf-8")
-        if proc.returncode == 0 and proc.stdout.strip():
-            dirs.append(realpath(proc.stdout.strip()))
-    return dirs
+def write_system_prompt(ctx: Context) -> None:
+    name = "directory-mode.md" if ctx.directory_mode else "protected-mode.md"
+    template = read_text(os.path.join(ctx.root, "share", "prompts", name))
+    if ctx.home_session:
+        access = ("You work in this directory, which holds the developer's home directory. You can read it, "
+                  "but not write it: write files in the temporary directory ($TMPDIR), and give the developer "
+                  "the changes or commands to apply them:")
+        read = ("You can read the rest of the computer, except, by design: protected repositories, old Claude "
+                "conversations, and, when protected repositories exist, credentials (SSH keys, keychain, tokens) "
+                "and temp directories.")
+    else:
+        access = "You work directly in this directory, and can read and write it:"
+        read = ("Outside this directory, you can read the system and the developer's tools (the directories on "
+                "the PATH), and the paths the developer opened in `.claudesandbox`. The developer's other files, "
+                "other disks and temp directories are hidden, by design.")
+    template = (template.replace("@PLACEHOLDER@", PLACEHOLDER_TEXT).replace("@SANDBOX_FILE@", SANDBOX_FILE)
+                .replace("@ROOT@", ctx.work).replace("@ACCESS@", access).replace("@READ@", read))
+    hidden = "\n".join(f"- `{p}`" for p in ctx.hidden)
+    lines = [hidden if line == "@HIDDEN_PATHS@" else line for line in template.split("\n")]
+    write_text(os.path.join(ctx.run_dir, "system-prompt.md"), "\n".join(lines))
 
 
-def write_srt_settings(ctx: Context) -> None:
+def make_srt_tmp(ctx: Context) -> None:
+    """srt's own temp directory: on Linux it creates there the proxy sockets
+    it binds into the sandbox, which must stay readable. The default temp
+    directory is hidden, and a socket path is limited to 108 bytes: a short
+    directory in /tmp, private to the session, removed after it."""
+    try:
+        ctx.srt_tmp = realpath(tempfile.mkdtemp(prefix="csb-", dir="/tmp"))
+    except OSError:
+        ctx.srt_tmp = os.path.join(ctx.run_dir, "srt")
+        ensure_real_dir(ctx.srt_tmp)
+
+
+# --- srt settings --------------------------------------------------------------
+
+
+def other_sessions(ctx: Context) -> List[str]:
+    """Sessions of other repositories, in the shared Claude configuration."""
+    mine = claude_project_dir(ctx)
+    result = []
+    for d in sorted(glob.glob(os.path.join(ctx.claude_home, "projects", "*"))):
+        if not os.path.isdir(d) or d == mine:
+            continue
+        result.append(d)
+        for transcript in glob.glob(os.path.join(d, "*.jsonl")):
+            sid = os.path.basename(transcript)[:-len(".jsonl")]
+            history = os.path.join(ctx.claude_home, "file-history", sid)
+            if os.path.lexists(history):
+                result.append(history)
+    return result
+
+
+def _claude_install_dir(ctx: Context) -> str:
+    """Claude Code's installation, readable by the session. The local install
+    (~/.claude/local) only holds the program; any other location inside a
+    sensitive area is refused."""
     home = os.environ["HOME"]
-    denied = denied_domains(ctx)
-    allowed = allowed_domains(ctx)
-    secrets = [ctx.state_root, f"{home}/.ssh", f"{home}/.claude", f"{home}/.claude.json"]
-    if not ctx.directory_mode:
-        secrets += [ctx.dev_root, ctx.dev_git_common]
-
-    # Claude Code installation: the local install (~/.claude/local) only holds
-    # the program; any other location inside a sensitive area is refused.
     claude_dir = os.path.dirname(realpath(ctx.real_claude))
     if path_within(f"{home}/.claude/local", claude_dir):
-        claude_dir = f"{home}/.claude/local"
-    else:
-        for secret in secrets:
-            if overlaps(secret, claude_dir):
-                die(f"the claude binary ({claude_dir}) is inside a sensitive area ({secret})")
-
-    # Reading. Where users' files live (the home directories, the other
-    # disks, the temp directories) nothing is readable, except what the
-    # session needs (below); the system and the tools installed outside the
-    # home directory are. Inside, these stay hidden even where an allowance
-    # covers them:
-    # - in protected mode, the developer's repository (Claude works in the
-    #   filtered copy), and every other protected repository, entirely;
-    # - the wrapper's state, except what the session needs (its Claude
-    #   configuration and its own directory: run/, tmp/, the copy);
-    # - old Claude transcripts, which may hold protected code;
-    # - credentials.
-    # A session in the home directory (or above it) reads it: the user areas
-    # are then readable too, and credentials and temp directories hidden only
-    # when protected code exists on the computer.
-    deny_read = [ctx.state, ctx.archive] + other_sessions(ctx) + ctx.protected_elsewhere
-    deny_read += [os.path.join(ctx.state_root, e) for e in sorted(os.listdir(ctx.state_root))
-                  if os.path.join(ctx.state_root, e) not in (ctx.claude_home, ctx.repo_dir)]
-    deny_read += [os.path.join(home, ".claude", item) for item in PRIVATE_CLAUDE_ITEMS]
+        return f"{home}/.claude/local"
+    sensitive = [ctx.state_root, f"{home}/.ssh", f"{home}/.claude", f"{home}/.claude.json"]
     if not ctx.directory_mode:
-        deny_read += [ctx.dev_root, ctx.dev_git_common]
-    if not ctx.read_only_root:
-        deny_read += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + _user_temp_dirs()
-        deny_read += [home] + USER_AREAS.get(platform.system(), []) + volume_roots()
-    elif protected_code_exists(ctx):
-        deny_read += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + _user_temp_dirs()
-    deny_read = [d for d in deny_read if os.path.lexists(d)]
-    # What the session needs is re-allowed only where a deny covers it (when
-    # it lives in a temp directory, say): on Linux, a read-only bind of a
-    # directory would cover the writable mounts inside it.
-    needed = [ctx.work, ctx.tmp, ctx.run_dir, ctx.claude_home, claude_dir, os.path.join(ctx.root, "libexec"),
+        sensitive += [ctx.dev_root, ctx.dev_git_common]
+    for path in sensitive:
+        if overlaps(path, claude_dir):
+            die(f"the claude binary ({claude_dir}) is inside a sensitive area ({path})")
+    return claude_dir
+
+
+def _read_rules(ctx: Context) -> Tuple[List[str], List[str]]:
+    """(denyRead, allowRead). Where users' files live (the home directories,
+    the other disks, the temp directories) nothing is readable but what the
+    session needs; the system and the tools installed elsewhere are. Inside,
+    these stay hidden even where an allowance covers them (in srt, a more
+    specific deny beats an allow): the developer's repository in protected
+    mode, every other protected repository, the wrapper's state except the
+    session's own, old Claude transcripts, credentials.
+
+    A session in the home directory works in it, so the user areas stay
+    readable; credentials and temp directories are then hidden only when
+    protected code exists on the computer."""
+    home = os.environ["HOME"]
+    deny = [ctx.state, ctx.archive] + other_sessions(ctx) + ctx.protected_elsewhere
+    deny += [os.path.join(ctx.state_root, e) for e in sorted(os.listdir(ctx.state_root))
+             if os.path.join(ctx.state_root, e) not in (ctx.claude_home, ctx.repo_dir)]
+    deny += [os.path.join(home, ".claude", item) for item in PRIVATE_CLAUDE_ITEMS]
+    if not ctx.directory_mode:
+        deny += [ctx.dev_root, ctx.dev_git_common]
+    if not ctx.home_session or protected_code_exists(ctx):
+        deny += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + user_temp_dirs()
+    if not ctx.home_session:
+        deny += [home] + USER_AREAS.get(platform.system(), []) + volume_roots()
+    deny = [d for d in deny if os.path.lexists(d)]
+    needed = [ctx.work, ctx.tmp, ctx.run_dir, ctx.claude_home, ctx.srt_tmp, _claude_install_dir(ctx),
+              os.path.join(ctx.root, "libexec"),
               os.path.join(os.path.dirname(os.path.dirname(realpath(ctx.srt))), "vendor")]
-    needed += ctx.config_read + ctx.granted_paths + path_tools(ctx) + [ctx.srt_tmp]
-    allow_read = [p for p in needed if any(path_within(d, p) and d != p for d in deny_read)]
-    allow_write = ([] if ctx.read_only_root else [ctx.work]) + [ctx.tmp, ctx.claude_home]
-    # Protected repositories under the session's directory: not writable either.
-    deny_write_protected = [r for r in ctx.protected_elsewhere if path_within(ctx.work, r)]
-    deny_write = [] if ctx.read_only_root else [os.path.join(ctx.copy_git, p) for p in LOCKED_GIT_PATHS]
-    deny_write.append(os.path.join(ctx.work, SANDBOX_FILE))
-    deny_write += [os.path.join(ctx.work, p) for p in ctx.hidden] + deny_write_protected
+    needed += ctx.config_read + ctx.granted_paths + path_tools(ctx)
+    # Listed only where a deny covers it: on Linux, a read-only bind of a
+    # directory would cover the writable mounts inside it.
+    allow = [p for p in needed if any(path_within(d, p) and d != p for d in deny)]
+    return deny, allow
+
+
+def _write_rules(ctx: Context) -> Tuple[List[str], List[str]]:
+    """(allowWrite, denyWrite). The working directory (unless it holds the
+    home directory), the session's temp directory and its Claude
+    configuration; inside, never the copy's .git configuration and hooks,
+    .claudesandbox, the hidden paths, nor a protected repository."""
+    allow = ([] if ctx.home_session else [ctx.work]) + [ctx.tmp, ctx.claude_home]
+    deny = [] if ctx.home_session else [os.path.join(ctx.copy_git, p) for p in LOCKED_GIT_PATHS]
+    deny.append(os.path.join(ctx.work, SANDBOX_FILE))
+    deny += [os.path.join(ctx.work, p) for p in ctx.hidden]
+    deny += [r for r in ctx.protected_elsewhere if path_within(ctx.work, r)]
     if platform.system() == "Linux":
         # bubblewrap denies a path by mounting over it: an absent path would
         # appear, on the host too, as an empty file during the session (git
-        # then fails on .git/commondir). The locked directories are created
-        # empty beforehand; the locked files that are absent are checked after
-        # the session instead (neutralize_git_files). A mount point cannot be
-        # renamed or removed, so writable directories need no anchor.
-        # Hidden directories, absent from the copy, are created empty for the
-        # same reason (git ignores empty directories). A hidden file cannot
-        # be: git would see a directory in its place. It is not locked; git
-        # refuses to add a file outside the visible paths anyway.
-        if not ctx.read_only_root and os.path.isdir(ctx.copy_git) and not os.path.islink(ctx.copy_git):
+        # then fails on .git/commondir). The locked directories and the hidden
+        # directories are created empty beforehand (git ignores empty
+        # directories); the locked files that are absent are checked after the
+        # session instead (neutralize_git_files). A hidden file cannot be
+        # created (git would see a directory in its place): it stays unlocked,
+        # and git refuses to add it. A mount point cannot be renamed or
+        # removed, so writable directories need no anchor.
+        if not ctx.home_session and os.path.isdir(ctx.copy_git) and not os.path.islink(ctx.copy_git):
             targets = [os.path.join(ctx.copy_git, d) for d in LOCKED_GIT_DIRS]
             targets += [os.path.join(ctx.work, p) for p in ctx.hidden_dirs]
             for d in targets:
@@ -329,12 +213,18 @@ def write_srt_settings(ctx: Context) -> None:
                         os.makedirs(d, exist_ok=True)
                     except OSError:
                         pass
-        deny_write = [p for p in deny_write if os.path.lexists(p)]
+        deny = [p for p in deny if os.path.lexists(p)]
     else:
         # Anchor in every writable directory: srt then forbids deleting or
         # renaming the directory, so it cannot be replaced by a link for the
         # next session.
-        deny_write += [os.path.join(p, f".{NAME}-anchor") for p in allow_write]
+        deny += [os.path.join(p, f".{NAME}-anchor") for p in allow]
+    return allow, deny
+
+
+def write_srt_settings(ctx: Context) -> None:
+    deny_read, allow_read = _read_rules(ctx)
+    allow_write, deny_write = _write_rules(ctx)
 
     def clean(paths):
         return sorted({p for p in paths if p})
@@ -347,8 +237,8 @@ def write_srt_settings(ctx: Context) -> None:
             "denyWrite": clean(deny_write),
         },
         "network": {
-            "allowedDomains": allowed,
-            "deniedDomains": denied,
+            "allowedDomains": allowed_domains(ctx),
+            "deniedDomains": denied_domains(ctx),
             "allowLocalBinding": False,
         },
         "allowAppleEvents": False,
@@ -369,14 +259,17 @@ def own_terminal() -> str:
     return os.ttyname(0)
 
 
+# --- the copy's .git on Linux ----------------------------------------------------
+
+
 def git_files_present(ctx: Context) -> List[str]:
     return [f for f in LOCKED_GIT_FILES if os.path.lexists(os.path.join(ctx.copy_git, f))]
 
 
 def neutralize_git_files(ctx: Context, before: List[str]) -> None:
     """Linux: a locked .git file that was absent at launch could not be denied
-    (see write_srt_settings). One that appeared during the session is renamed,
-    so that no git outside the sandbox reads it (.git/commondir would point git
+    (see _write_rules). One that appeared during the session is renamed, so
+    that no git outside the sandbox reads it (.git/commondir would point git
     at a configuration Claude wrote)."""
     if platform.system() != "Linux":
         return
@@ -388,42 +281,11 @@ def neutralize_git_files(ctx: Context, before: List[str]) -> None:
             warn(f"{path} was created during the session: renamed to {aside}")
 
 
-def write_system_prompt(ctx: Context) -> None:
-    name = "directory-mode.md" if ctx.directory_mode else "protected-mode.md"
-    template = read_text(os.path.join(ctx.root, "share", "prompts", name))
-    access = ("You work in this directory, which holds the developer's home directory. You can read it, "
-              "but not write it: write files in the temporary directory ($TMPDIR), and give the developer "
-              "the changes or commands to apply them:" if ctx.read_only_root
-              else "You work directly in this directory, and can read and write it:")
-    if ctx.read_only_root:
-        read = ("You can read the rest of the computer, except, by design: protected repositories, old Claude "
-                "conversations, and, when protected repositories exist, credentials (SSH keys, keychain, tokens) "
-                "and temp directories.")
-    else:
-        read = ("Outside this directory, you can read the system and the developer's tools (the directories on "
-                "the PATH), and the paths the developer opened in `.claudesandbox`. The developer's other files, "
-                "other disks and temp directories are hidden, by design.")
-    template = (template.replace("@PLACEHOLDER@", PLACEHOLDER_TEXT).replace("@SANDBOX_FILE@", SANDBOX_FILE)
-                .replace("@ROOT@", ctx.work).replace("@ACCESS@", access).replace("@READ@", read))
-    paths = "\n".join(f"- `{p}`" for p in ctx.hidden)
-    lines = [paths if line == "@PROTECTED_PATHS@" else line for line in template.split("\n")]
-    write_text(os.path.join(ctx.run_dir, "system-prompt.md"), "\n".join(lines))
+# --- launch --------------------------------------------------------------------
 
 
-def make_srt_tmp(ctx: Context) -> None:
-    """srt's own temp directory: on Linux it creates there the proxy sockets
-    it binds into the sandbox, which must stay readable. The default temp
-    directory is hidden, and a socket path is limited to 108 bytes: a short
-    directory in /tmp, private to the session, removed after it."""
-    try:
-        ctx.srt_tmp = realpath(tempfile.mkdtemp(prefix="csb-", dir="/tmp"))
-    except OSError:
-        ctx.srt_tmp = os.path.join(ctx.run_dir, "srt")
-        ensure_real_dir(ctx.srt_tmp)
-
-
-def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
-    """Runs Claude Code inside srt. Returns claude's exit status."""
+def _sandbox_env(ctx: Context) -> dict:
+    """The environment of Claude Code in the sandbox."""
     env = dict(os.environ)
     env.update({
         "CLAUDE_CONFIG_DIR": ctx.claude_home,
@@ -449,10 +311,16 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
                                                       f"-Djava.io.tmpdir={ctx.tmp}"]))
     for var in ("SSH_AUTH_SOCK", "GIT_ASKPASS", "SSH_ASKPASS"):
         env.pop(var, None)
-    # srt forces TMPDIR=/tmp/claude, shared by every sandbox: keep the
-    # repository's own tmp/ instead.
+    return env
+
+
+def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
+    """Runs Claude Code inside srt. Returns claude's exit status."""
+    env = _sandbox_env(ctx)
     cmd = [ctx.srt, "--settings", os.path.join(ctx.run_dir, "srt-settings.json"), "--",
-           # The real path: links outside the readable areas do not resolve.
+           # srt sets TMPDIR to /tmp/claude, shared by every sandbox: the
+           # session's tmp/ instead. The real path of claude: links outside the
+           # readable areas do not resolve.
            "/usr/bin/env", f"TMPDIR={ctx.tmp}/", realpath(ctx.real_claude),
            "--settings", claude_settings(ctx),
            "--append-system-prompt-file", os.path.join(ctx.run_dir, "system-prompt.md"), *args]
@@ -461,13 +329,14 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
         node = shutil.which("node") or die("node not found")
         cmd = [node, "--import", os.path.join(ctx.root, "libexec", "srt-own-terminal.mjs"), *cmd]
         env["CLAUDE_SECURE_SANDBOX_TTY"] = terminal
-    # Ctrl-C goes to Claude; the wrapper must survive to print the end of
-    # session summary. A handler (unlike an ignored signal) is reset in child
-    # processes.
+    # srt's own temp directory (make_srt_tmp).
+    env["TMPDIR"] = ctx.srt_tmp
     if not confirm_session(ctx):
         log("cancelled")
         return 130
+    # Ctrl-C goes to Claude; the wrapper must survive to print the end of
+    # session summary. A handler (unlike an ignored signal) is reset in child
+    # processes.
     signal.signal(signal.SIGINT, lambda *_: None)
-    env["TMPDIR"] = ctx.srt_tmp
     status = subprocess.call(cmd, cwd=cwd, env=env)
     return 128 - status if status < 0 else status

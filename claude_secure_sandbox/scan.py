@@ -12,7 +12,7 @@ import platform
 from typing import List
 
 from .common import path_within, read_lines, realpath, volume_roots
-from .protect import find_protect_files, protects
+from .sandbox_file import find_sandbox_files, protects
 
 # macOS reaches the data volume through firmlinks; fd reports it under this prefix.
 MACOS_DATA = "/System/Volumes/Data"
@@ -51,7 +51,7 @@ def scan(state_root: str, roots: List[str]) -> List[str]:
         if real in seen or not os.path.isdir(real):
             continue
         seen.add(real)
-        for f in find_protect_files(real, one_file_system=True, timeout=600):
+        for f in find_sandbox_files(real, one_file_system=True, timeout=600):
             directory = os.path.dirname(f)
             if platform.system() == "Darwin" and directory.startswith(MACOS_DATA + "/"):
                 directory = directory[len(MACOS_DATA):]

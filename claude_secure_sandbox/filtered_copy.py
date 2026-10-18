@@ -12,7 +12,7 @@ from typing import List, Set, Tuple
 from .common import (EMPTY_BLOB, NULL_OID, PLACEHOLDER_TEXT, SANDBOX_FILE, GitError,
                      die, log, path_within, read_lines, stamp, warn, write_lines, write_text)
 from .context import Context
-from .protect import hidden_roots, is_visible, sparse_escape
+from .sandbox_file import hidden_roots, is_visible, sparse_escape
 
 _FILE_MODES = ("100644", "100755", "120000")
 
@@ -94,7 +94,7 @@ def init_copy(ctx: Context) -> None:
     for key, value in settings:
         ctx.git_copy.out("config", key, value)
     write_text(os.path.join(ctx.copy_git, "info", "sparse-checkout"), "/*\n")
-    for f in ("host-tips", "protected-blobs", "hidden-paths"):
+    for f in ("host-tips", "hidden-blobs", "hidden-paths"):
         write_text(ctx.state_file(f), "")
     ctx.placeholder = _hash_placeholder(ctx, write=True)
 
@@ -123,7 +123,7 @@ def fetch_from_dev(ctx: Context) -> List[str]:
     return tips
 
 
-def _log_protected_paths(ctx: Context, revs: List[str]) -> str:
+def _log_hidden_paths(ctx: Context, revs: List[str]) -> str:
     """git log --raw restricted to hidden paths: everything except [visible].
     --full-history walks every side branch, including merges that discarded
     it."""
@@ -135,15 +135,15 @@ def _log_protected_paths(ctx: Context, revs: List[str]) -> str:
         input="".join(r + "\n" for r in revs))
 
 
-def scan_protected_blobs(ctx: Context, tips: List[str]) -> Set[str]:
+def scan_hidden_history(ctx: Context, tips: List[str]) -> Set[str]:
     """Fingerprints of every content that existed under a hidden path, in
     the commits that are new since the last scan, added to
-    state/protected-blobs, and those paths, added to state/hidden-paths.
+    state/hidden-blobs, and those paths, added to state/hidden-paths.
     Returns the blobs found by this scan."""
     old = read_lines(ctx.state_file("host-tips"))
     revs = tips + ["^" + t for t in old]
     try:
-        raw = _log_protected_paths(ctx, revs)
+        raw = _log_hidden_paths(ctx, revs)
     except GitError:
         die("cannot scan the developer's history")
     found, paths = set(), set()
@@ -159,8 +159,8 @@ def scan_protected_blobs(ctx: Context, tips: List[str]) -> Set[str]:
         if new_mode in _FILE_MODES:
             found.add(new_oid)
     found -= {NULL_OID, EMPTY_BLOB}
-    known = set(read_lines(ctx.state_file("protected-blobs")))
-    write_lines(ctx.state_file("protected-blobs"), sorted(known | found))
+    known = set(read_lines(ctx.state_file("hidden-blobs")))
+    write_lines(ctx.state_file("hidden-blobs"), sorted(known | found))
     known_paths = set(read_lines(ctx.state_file("hidden-paths")))
     if not paths <= known_paths:
         write_lines(ctx.state_file("hidden-paths"), sorted(known_paths | paths))
@@ -199,14 +199,14 @@ def repack_without(ctx: Context, remove: Set[str]) -> None:
     write_text(os.path.join(pack_dir, f"pack-{name}.promisor"), "")
 
 
-def remove_protected_blobs(ctx: Context) -> bool:
-    """Removes every known protected content from the copy, then checks it is gone."""
-    protected = set(read_lines(ctx.state_file("protected-blobs")))
-    hits = present_blobs(ctx) & protected
+def remove_hidden_blobs(ctx: Context) -> bool:
+    """Removes every known hidden content from the copy, then checks it is gone."""
+    hidden = set(read_lines(ctx.state_file("hidden-blobs")))
+    hits = present_blobs(ctx) & hidden
     if hits:
-        log(f"removing {len(hits)} protected content(s) also seen under a public path")
+        log(f"removing {len(hits)} hidden content(s) also seen under a visible path")
         repack_without(ctx, hits)
-    return not (present_blobs(ctx) & protected)
+    return not (present_blobs(ctx) & hidden)
 
 
 def _links_in(path: str) -> bool:
@@ -240,7 +240,7 @@ def install_placeholders(ctx: Context, new: Set[str]) -> None:
     """Creates the replace refs that show the placeholder instead of hidden
     contents. If Claude deleted some, all of them are recreated."""
     ctx.placeholder = _hash_placeholder(ctx, write=True)
-    known = read_lines(ctx.state_file("protected-blobs"))
+    known = read_lines(ctx.state_file("hidden-blobs"))
     have = len(ctx.git_copy.out("for-each-ref", "--format=x", "refs/replace").splitlines())
     targets = known if have < len(known) else sorted(new)
     updates = "".join(f"update refs/replace/{oid} {ctx.placeholder}\n"
@@ -256,21 +256,21 @@ def install_placeholders(ctx: Context, new: Set[str]) -> None:
 def prepare_copy(ctx: Context) -> None:
     """Creates the copy if needed, or updates it. Rebuilds it if a check fails."""
     try:
-        old_hash = open(ctx.state_file("protect-hash")).read().strip()
+        old_hash = open(ctx.state_file("visible-hash")).read().strip()
     except OSError:
         old_hash = ""
     rebuild = ""
     if not os.path.isdir(ctx.copy_git):
         rebuild = "init"
     elif old_hash != ctx.visible_hash:
-        rebuild = "protect-file"
+        rebuild = "visible-changed"
     elif not check_copy_integrity(ctx):
         rebuild = "integrity"
     ctx.spec = write_spec(ctx)
     messages = {
-        "protect-file": (log, f"the [visible] paths of {SANDBOX_FILE} changed: rebuilding the copy and archiving sessions"),
+        "visible-changed": (log, f"the [visible] paths of {SANDBOX_FILE} changed: rebuilding the copy and archiving sessions"),
         "integrity": (warn, "the copy's .git was tampered with: rebuilding"),
-        "verify": (warn, "protected content found in the copy: rebuilding"),
+        "verify": (warn, "hidden content found in the copy: rebuilding"),
         "init": (log, "creating the filtered copy (first run, may take a while)"),
     }
     for attempt in (1, 2):
@@ -286,17 +286,17 @@ def prepare_copy(ctx: Context) -> None:
         except GitError:
             tips = None
         if tips is not None:
-            new = scan_protected_blobs(ctx, tips)
-            if remove_protected_blobs(ctx):
+            new = scan_hidden_history(ctx, tips)
+            if remove_hidden_blobs(ctx):
                 install_placeholders(ctx, new)
                 known = set(read_lines(ctx.state_file("host-tips")))
                 write_lines(ctx.state_file("host-tips"), sorted(known | set(tips)))
-                write_text(ctx.state_file("protect-hash"), ctx.visible_hash + "\n")
+                write_text(ctx.state_file("visible-hash"), ctx.visible_hash + "\n")
                 return
         if attempt == 2:
             break
         rebuild = "verify"
-    die("cannot get a copy free of protected content; session cancelled")
+    die("cannot get a copy free of hidden content; session cancelled")
 
 
 def claude_project_dir(ctx: Context, path: str = "") -> str:
@@ -339,7 +339,7 @@ def archive_copy(ctx: Context, reason: str) -> None:
                 os.makedirs(os.path.join(dest, "file-history"), exist_ok=True)
                 os.rename(history, os.path.join(dest, "file-history", sid))
         os.rename(enc, os.path.join(dest, "projects"))
-    for f in ("host-tips", "protected-blobs", "hidden-paths", "protect-hash"):
+    for f in ("host-tips", "hidden-blobs", "hidden-paths", "visible-hash"):
         try:
             os.unlink(ctx.state_file(f))
         except FileNotFoundError:
@@ -357,7 +357,7 @@ def write_sparse_patterns(ctx: Context, commit: str) -> List[str]:
     it, and let Claude add files at new paths (a Makefile at the root), which
     the developer can then list in [visible]. Returns the visible files whose
     content is hidden."""
-    hidden = set(read_lines(ctx.state_file("protected-blobs")))
+    hidden = set(read_lines(ctx.state_file("hidden-blobs")))
     roots, _ = hidden_roots(ctx.visible, read_lines(ctx.state_file("hidden-paths")))
     lines = ["/*"] + [f"!/{sparse_escape(r)}" for r in roots]
     public = []
@@ -380,12 +380,12 @@ def write_sparse_patterns(ctx: Context, commit: str) -> List[str]:
 
 def report_absent_public_files(ctx: Context, paths: List[str]) -> None:
     """Tells the developer, once per file, why a public file is missing from
-    the copy: its content is also the content of a protected file."""
+    the copy: its content is also the content of a hidden file."""
     reported = set(read_lines(ctx.state_file("reported-absent")))
     new = [p for p in paths if p not in reported]
     if new:
         shown = new[:10] + ([f"... and {len(new) - 10} more"] if len(new) > 10 else [])
-        log("public files absent from the copy, because a protected file has the same content:"
+        log("visible files absent from the copy, because a hidden file has the same content:"
             + "".join(f"\n  {p}" for p in shown))
         write_lines(ctx.state_file("reported-absent"), sorted(reported | set(new)))
 

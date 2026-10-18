@@ -7,21 +7,16 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from claude_secure_sandbox.common import path_within  # noqa: E402
-from claude_secure_sandbox.protect import (SandboxFile, hidden_roots, is_visible, leads_to_visible,  # noqa: E402
-                                           normalize, sparse_escape)
-from claude_secure_sandbox.sandbox import domains_overlap, local_destination, url_host  # noqa: E402
+from claude_secure_sandbox.access import domains_overlap, local_destination, path_tools, url_host  # noqa: E402
+from claude_secure_sandbox.sandbox_file import (SandboxFile, hidden_roots, is_visible,  # noqa: E402
+                                                leads_to_visible, normalize_visible, sparse_escape)
 
 
-class NormalizeTest(unittest.TestCase):
+class NormalizeVisibleTest(unittest.TestCase):
     def test_literal_paths(self):
-        self.assertEqual(normalize("core/engine"), "core/engine")
-        self.assertEqual(normalize("  ./core//engine/  "), "core/engine")
-        self.assertEqual(normalize("a/./b"), "a/b")
-
-    def test_comments_and_blank_lines(self):
-        self.assertIsNone(normalize(""))
-        self.assertIsNone(normalize("   "))
-        self.assertIsNone(normalize("# comment"))
+        self.assertEqual(normalize_visible("core/engine"), "core/engine")
+        self.assertEqual(normalize_visible("./core//engine/"), "core/engine")
+        self.assertEqual(normalize_visible("a/./b"), "a/b")
 
     def test_refused(self):
         cases = {
@@ -40,7 +35,7 @@ class NormalizeTest(unittest.TestCase):
         for line, message in cases.items():
             with self.subTest(line=line):
                 with self.assertRaises(ValueError) as e:
-                    normalize(line)
+                    normalize_visible(line)
                 self.assertIn(message, str(e.exception))
 
 
@@ -116,7 +111,6 @@ class VisibleTest(unittest.TestCase):
 class PathToolsTest(unittest.TestCase):
     def test_path_tools(self):
         from types import SimpleNamespace
-        from claude_secure_sandbox.sandbox import path_tools
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         ctx = SimpleNamespace(root=root, run_dir="/nonexistent/run", state_root="/nonexistent/state",
                               protected_elsewhere=[], directory_mode=True)

@@ -72,13 +72,18 @@ unset CLAUDE_SECURE_SANDBOX_ACTIVE CLAUDE_CONFIG_DIR ZDOTDIR XDG_CONFIG_HOME
 STATE_ROOT=$CLAUDE_SECURE_SANDBOX_HOME
 
 # Fake claude: outside the sandbox it says so; inside it runs the scenario
-# named by CS_TEST_SCENARIO.
+# named by CS_TEST_SCENARIO, with the helpers of lib.sh: t (the command must
+# succeed) and tn (it must fail), each reporting IN-OK or IN-FAIL for $name.
+cat > "$T/fakebin/lib.sh" <<'EOF'
+t()  { if "$@" >/dev/null 2>&1; then echo "IN-OK $name"; else echo "IN-FAIL $name"; fi; }
+tn() { if "$@" >/dev/null 2>&1; then echo "IN-FAIL $name"; else echo "IN-OK $name"; fi; }
+EOF
 cat > "$T/fakebin/claude" <<'EOF'
 #!/bin/bash
 if [ -z "${CLAUDE_SECURE_SANDBOX_ACTIVE:-}" ]; then echo "UNSANDBOXED $*"; exit 0; fi
 echo "SANDBOXED cwd=$(pwd -P)"
 echo "ARGS $*"
-[ -n "${CS_TEST_SCENARIO:-}" ] && exec bash "$CS_TEST_SCENARIO"
+[ -n "${CS_TEST_SCENARIO:-}" ] && exec bash -c '. "$1"; . "$2"' _ "$(dirname "$0")/lib.sh" "$CS_TEST_SCENARIO"
 exit 0
 EOF
 chmod +x "$T/fakebin/claude"
@@ -153,25 +158,19 @@ run_claude() { # scenario, args...
   local scenario=$1; shift
   ( cd "$D" && CS_TEST_SCENARIO=$scenario claude "$@" ) < /dev/null > "$T/out/last" 2>&1
 }
-# claude in a terminal, from the current directory, that answers the
-# wrapper's question.
-run_in_terminal() { # answer
-  if [ "$OS" = Darwin ]; then
-    { printf '%s\n\n' "$1"; sleep 3; } | script -q /dev/null claude
-  else
-    { printf '%s\n\n' "$1"; sleep 3; } | script -q -e -c claude /dev/null
-  fi
+# claude in a terminal (script), from the current directory, fed with stdin.
+claude_in_terminal() { # args...
+  if [ "$OS" = Darwin ]; then script -q /dev/null claude "$@"; else script -q -e -c "claude $*" /dev/null; fi
 }
-# Same, in a terminal that answers the wrapper's question.
+# claude in a terminal that answers the wrapper's question, then Enter.
+run_in_terminal() { # answer, args...
+  local answer=$1; shift
+  { printf '%s\n\n' "$answer"; sleep 3; } | claude_in_terminal "$@"
+}
+# Same, in the developer's repository, with a scenario.
 run_claude_answer() { # answer, scenario, args...
   local answer=$1 scenario=$2; shift 2
-  if [ "$OS" = Darwin ]; then
-    ( cd "$D" && { printf '%s\n\n' "$answer"; sleep 3; } |
-        CS_TEST_SCENARIO=$scenario script -q /dev/null claude "$@" ) > "$T/out/last" 2>&1
-  else
-    ( cd "$D" && { printf '%s\n\n' "$answer"; sleep 3; } |
-        CS_TEST_SCENARIO=$scenario script -q -e -c "claude $*" /dev/null ) > "$T/out/last" 2>&1
-  fi
+  ( cd "$D" && CS_TEST_SCENARIO=$scenario run_in_terminal "$answer" "$@" ) > "$T/out/last" 2>&1
 }
 
 # --- 1. first session --------------------------------------------------------------
@@ -179,8 +178,6 @@ run_claude_answer() { # answer, scenario, args...
 section "first session: filtered copy and sandbox"
 
 cat > "$T/fakebin/s1.sh" <<EOF
-t()  { if "\$@" >/dev/null 2>&1; then echo "IN-OK \$name"; else echo "IN-FAIL \$name"; fi; }
-tn() { if "\$@" >/dev/null 2>&1; then echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi; }
 name="reading the developer's repository is blocked";  tn cat "$D/src/a.txt"
 name="reading the developer's .git is blocked";        tn ls "$D/.git"
 name="reading the fake ~/.ssh is blocked";             tn cat "$T/home/.ssh/id_test"
@@ -201,7 +198,7 @@ name="system files are readable";                      t cat /etc/hosts
 name="git works";                                      t git --version
 name="Claude Code's login is readable";                t grep -q FAKE-OAUTH-1 "\$CLAUDE_CONFIG_DIR/.credentials.json"
 name="Claude Code's temp root is the session's";       t sh -c '[ "\$CLAUDE_CODE_TMPDIR" = "\${TMPDIR%/}" ]'
-name="reading the wrapper state is blocked";           tn cat "$COPY/state/protected-blobs"
+name="reading the wrapper state is blocked";           tn cat "$COPY/state/hidden-blobs"
 name="writing .git/config is blocked";                 tn sh -c 'echo x >> .git/config'
 name="writing .git/hooks is blocked";                  tn sh -c 'echo x > .git/hooks/post-checkout'
 name="writing alternates is blocked";                  tn sh -c 'echo /x > .git/objects/info/alternates'
@@ -261,7 +258,7 @@ check "Claude Code's own sandbox disabled" grep -q -- '"sandbox": {"enabled": fa
 check "status line marks the session as sandboxed" grep -q -- '"statusLine".*sandboxed · protected repository repo · main' "$T/out/last"
 check "no banner when the output is not a terminal" sh -c "! grep -q 'sandboxed session' '$T/out/last'"
 collect
-check "absent public file reported" sh -c "grep -q 'a protected file has the same content' '$T/out/last' && grep -q '^  src/dup.txt' '$T/out/last'"
+check "absent public file reported" sh -c "grep -q 'a hidden file has the same content' '$T/out/last' && grep -q '^  src/dup.txt' '$T/out/last'"
 
 section "end of session and git fetch"
 check "end of session lists main" grep -q '  main: 1 new commit' "$T/out/last"
@@ -300,8 +297,6 @@ check "a newer keychain login replaces it" grep -q FAKE-OAUTH-2 "$CREDS"
 
 section "new session: Claude's branch is ahead"
 cat > "$T/fakebin/s1b.sh" <<'EOF'
-t()  { if "$@" >/dev/null 2>&1; then echo "IN-OK $name"; else echo "IN-FAIL $name"; fi; }
-tn() { if "$@" >/dev/null 2>&1; then echo "IN-FAIL $name"; else echo "IN-OK $name"; fi; }
 name="Claude continues on its own commits";  t grep -q "public v3 by claude" src/a.txt
 name="uncommitted work stashed";             t sh -c 'git stash list | grep -q claude-secure-sandbox'
 name="uncommitted file removed from disk";   tn test -e src/wip.txt
@@ -311,7 +306,7 @@ EOF
 run_claude "$T/fakebin/s1b.sh"
 collect
 check "continuation announced" grep -q "continuing on Claude's main: 1 commit" "$T/out/last"
-check_not "absent public file reported only once" grep -q 'a protected file has the same content' "$T/out/last"
+check_not "absent public file reported only once" grep -q 'a hidden file has the same content' "$T/out/last"
 check "git pull claude main" git -C "$D" pull -q --ff-only claude main
 check "Claude's content merged" sh -c "grep -q 'public v3 by claude' '$D/src/a.txt' && test -f '$D/src/c.txt'"
 check "protected content intact after merge" grep -q "SECRET-TWO" "$D/secret/s.txt"
@@ -331,8 +326,6 @@ section "new session: Claude's commits integrated (rebased and signed)"
 mkdir -p "$STATE_ROOT/claude-home/projects/-other-repo"
 echo "OTHER-TRANSCRIPT" > "$STATE_ROOT/claude-home/projects/-other-repo/abc.jsonl"
 cat > "$T/fakebin/s2.sh" <<'EOF'
-t()  { if "$@" >/dev/null 2>&1; then echo "IN-OK $name"; else echo "IN-FAIL $name"; fi; }
-tn() { if "$@" >/dev/null 2>&1; then echo "IN-FAIL $name"; else echo "IN-OK $name"; fi; }
 name="other repositories' sessions are unreadable";   tn cat "$CLAUDE_CONFIG_DIR/projects/-other-repo/abc.jsonl"
 name="sandbox Claude configuration is readable";      t cat "$CLAUDE_CONFIG_DIR/settings.json"
 rm -f "$CLAUDE_CONFIG_DIR/.claude.json" && ln -s "$CS_TEST_SECRET_JSON" "$CLAUDE_CONFIG_DIR/.claude.json"
@@ -380,11 +373,7 @@ run_claude_answer 1 "$T/fakebin/s-dev.sh"
 check "choice 1: backup announced" grep -q "Claude's main kept: git fetch claude refs/backup/" "$T/out/last"
 check "start screen says why" grep -q "This repository is protected: Claude only sees the \[visible\] paths of its .claudesandbox." "$T/out/last"
 check "start screen lists what is hidden" grep -q "Hidden from Claude:  lib/deep/core, secret" "$T/out/last"
-if [ "$OS" = Darwin ]; then
-  ( cd "$D" && sleep 3 | CS_TEST_SCENARIO=$T/fakebin/s-dev.sh script -q /dev/null claude ) > "$T/out/cancel" 2>&1
-else
-  ( cd "$D" && sleep 3 | CS_TEST_SCENARIO=$T/fakebin/s-dev.sh script -q -e -c claude /dev/null ) > "$T/out/cancel" 2>&1
-fi
+( cd "$D" && sleep 3 | CS_TEST_SCENARIO=$T/fakebin/s-dev.sh claude_in_terminal ) > "$T/out/cancel" 2>&1
 check "no Enter: Claude not started" sh -c "grep -q cancelled '$T/out/cancel' && ! grep -q '^SANDBOXED' '$T/out/cancel'"
 collect
 ref=$(sed -n "s/.*git fetch claude \(refs\/backup\/[^ ]*\).*/\1/p" "$T/out/last" | tr -d '\r' | head -1)
@@ -456,7 +445,7 @@ run_claude "$T/fakebin/s6.sh"
 check "rebuild announced" grep -q "\[visible\] paths of $PF changed" "$T/out/last"
 check_not "narrowing [visible] asks nothing" grep -q "could not see before" "$T/out/last"
 check "newly protected path removed from history" grep -q '^IN-OK' "$T/out/last"
-check "archive created" sh -c "ls '$COPY/archive' | grep -q protect-file"
+check "archive created" sh -c "ls '$COPY/archive' | grep -q visible-changed"
 
 section "[visible] widened by one of Claude's commits"
 cat > "$T/fakebin/s7.sh" <<EOF
@@ -472,7 +461,7 @@ cat > "$T/fakebin/s-hidden.sh" <<'EOF'
 if [ -e secret/s.txt ]; then echo "IN-FAIL secret still hidden"; else echo "IN-OK secret still hidden"; fi
 EOF
 cat > "$T/fakebin/s-visible.sh" <<'EOF'
-if grep -q SECRET-THREE secret/s.txt 2>/dev/null; then echo "IN-OK unprotected path visible"; else echo "IN-FAIL unprotected path visible"; fi
+if grep -q SECRET-THREE secret/s.txt 2>/dev/null; then echo "IN-OK confirmed path visible"; else echo "IN-FAIL confirmed path visible"; fi
 EOF
 run_claude "$T/fakebin/s-hidden.sh"
 check "widening detected" grep -q "shows Claude paths it could not see before" "$T/out/last"
@@ -527,8 +516,6 @@ http_pid=$!
 CRON_BEFORE=$(crontab -l 2>/dev/null)
 sleep 1
 cat > "$T/fakebin/s-escape.sh" <<EOF
-t()  { if "\$@" >/dev/null 2>&1; then echo "IN-OK \$name"; else echo "IN-FAIL \$name"; fi; }
-tn() { if "\$@" >/dev/null 2>&1; then echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi; }
 name="crontab is blocked";                  tn sh -c '(crontab -l 2>/dev/null; echo "# cs-test-escape") | crontab -'
 name="at is blocked";                       tn sh -c 'echo true | at now + 30 minutes'
 if [ "\$(uname)" = Darwin ]; then
@@ -600,12 +587,10 @@ relay_pid=$!
 sleep 1
 check "the helper serves the protected file outside the sandbox" sh -c "curl -s -m 3 --noproxy '*' http://127.0.0.1:$RELAY_PORT/ | grep -q SECRET-"
 cat > "$T/fakebin/s-relay.sh" <<EOF
-tn() { if "\$@" >/dev/null 2>&1; then echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi; }
 name="relay unreachable through the proxy";          tn sh -c 'curl -s -m 5 http://127.0.0.1:$RELAY_PORT/ | grep -q SECRET-'
 name="relay unreachable through the proxy, by name"; tn sh -c 'curl -s -m 5 http://localhost:$RELAY_PORT/ | grep -q SECRET-'
 name="relay unreachable directly";                   tn sh -c 'curl -s -m 5 --noproxy "*" http://127.0.0.1:$RELAY_PORT/ | grep -q SECRET-'
 name="relay unreachable through its Unix socket";    tn sh -c 'curl -s -m 5 --unix-socket "$RELAY_SOCK" http://x/ | grep -q SECRET-'
-t()  { if "\$@" >/dev/null 2>&1; then echo "IN-OK \$name"; else echo "IN-FAIL \$name"; fi; }
 name="an allowed domain is reachable through the proxy"; t sh -c '[ "\$(curl -s -m 15 -o /dev/null -w "%{http_code}" https://api.anthropic.com)" != 000 ]'
 EOF
 run_claude "$T/fakebin/s-relay.sh"
@@ -621,8 +606,6 @@ m, s = pty.openpty(); open(sys.argv[1], "w").write(os.ttyname(s)); time.sleep(30
 tty_pid=$!
 sleep 1
 cat > "$T/fakebin/s-tty.sh" <<EOF
-t()  { if "\$@" >/dev/null 2>&1; then echo "IN-OK \$name"; else echo "IN-FAIL \$name"; fi; }
-tn() { if "\$@" >/dev/null 2>&1; then echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi; }
 name="raw mode works on Claude's terminal"; t stty raw; stty sane
 name="another terminal cannot be opened";   tn python3 -c 'import os, sys; os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY)' "$(cat "$T/out/other-tty")"
 EOF
@@ -654,8 +637,6 @@ mkdir -p "$F/sub" && git init -q "$F" && echo "free readme" > "$F/README" && ech
 git -C "$F" add -A && git -C "$F" commit -qm init
 mkdir -p "$T/plain/nogit" && echo "loose" > "$T/plain/nogit/loose.txt"
 cat > "$T/fakebin/s-dir.sh" <<EOF
-t()  { if "\$@" >/dev/null 2>&1; then echo "IN-OK \$name"; else echo "IN-FAIL \$name"; fi; }
-tn() { if "\$@" >/dev/null 2>&1; then echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi; }
 name="directory mode: the repository is readable";        t cat "$F/README"
 name="directory mode: writing in the repository";          t sh -c 'echo new > "$F/new.txt"'
 name="directory mode: git commit";                         t sh -c 'cd "$F" && git add new.txt && git commit -qm "by claude"'
@@ -670,22 +651,14 @@ check "repository without protection file: sandboxed" grep -q "^SANDBOXED cwd=$F
 check "arguments passed" grep -q -- 'ARGS .*--foo' "$T/out/last"
 collect
 check "Claude's commit is in the repository" sh -c "git -C '$F' log -1 --format=%s | grep -q 'by claude'"
-if [ "$OS" = Darwin ]; then
-  ( cd "$F" && sleep 3 | script -q /dev/null claude ) > "$T/out/screen" 2>&1
-else
-  ( cd "$F" && sleep 3 | script -q -e -c claude /dev/null ) > "$T/out/screen" 2>&1
-fi
+( cd "$F" && sleep 3 | claude_in_terminal ) > "$T/out/screen" 2>&1
 check "directory mode screen: the other files are hidden" grep -q "not your other files" "$T/out/screen"
 mkdir -p "$T/home/never-opened" && echo "core" > "$T/home/never-opened/.claudeprotected"
 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from claude_secure_sandbox.scan import scan; print("\n".join(scan(sys.argv[2], [sys.argv[3]])))' \
   "$ROOT" "$STATE_ROOT" "$T" > "$T/out/scan"
 check "machine scan finds the protected repositories" sh -c "grep -qx '$D' '$T/out/scan' && grep -qx '$T/home/never-opened' '$T/out/scan'"
 check_not "machine scan skips the wrapper's copies" grep -q "$STATE_ROOT" "$T/out/scan"
-if [ "$OS" = Darwin ]; then
-  ( cd "$T/home" && sleep 3 | script -q /dev/null claude ) > "$T/out/screen" 2>&1
-else
-  ( cd "$T/home" && sleep 3 | script -q -e -c claude /dev/null ) > "$T/out/screen" 2>&1
-fi
+( cd "$T/home" && sleep 3 | claude_in_terminal ) > "$T/out/screen" 2>&1
 check "home screen names a protected repository found at launch, never opened" grep -q "Protected, hidden:.*~/never-opened" "$T/out/screen"
 cat > "$T/fakebin/s-nogit.sh" <<'EOF'
 if cat loose.txt >/dev/null 2>&1; then echo "IN-OK outside a repository: the directory is readable"; else echo "IN-FAIL outside a repository: the directory is readable"; fi
@@ -714,8 +687,6 @@ section "home directory: readable, not writable"
 echo "note" > "$T/home/notes.txt"
 HOME_RUN=$STATE_ROOT/home-$(python3 -c 'import hashlib, sys; print(hashlib.sha1(sys.argv[1].encode()).hexdigest()[:10])' "$T/home")/run
 cat > "$T/fakebin/s-home.sh" <<EOF
-t()  { if "\$@" >/dev/null 2>&1; then echo "IN-OK \$name"; else echo "IN-FAIL \$name"; fi; }
-tn() { if "\$@" >/dev/null 2>&1; then echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi; }
 name="home: the home directory is readable";              t cat "$T/home/notes.txt"
 name="home: credentials hidden, protected code exists";   tn cat "$T/home/.ssh/id_test"
 name="home: a protected repository in it is hidden";      tn cat "$T/home/never-opened/.claudeprotected"
