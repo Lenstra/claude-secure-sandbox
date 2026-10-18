@@ -19,8 +19,12 @@ class Context:
         self.srt = ""
         self.dev_root = ""
         self.dev_git_common = ""
-        self.protected: List[str] = []
-        self.protect_hash = ""
+        # Protected mode: the confirmed [visible] paths, the only ones Claude
+        # sees, and the topmost hidden paths of HEAD, for display.
+        self.visible: List[str] = []
+        self.hidden: List[str] = []
+        self.hidden_dirs: List[str] = []
+        self.visible_hash = ""
         self.placeholder = ""
         self.spec = ""
         self.fresh_copy = False

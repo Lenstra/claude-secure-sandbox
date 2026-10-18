@@ -1,6 +1,6 @@
 # claude-secure-sandbox
 
-Use Claude Code on repositories that contain code it must never read. You list the sensitive paths in a `.claudesandbox` file and keep typing `claude`: the operating system guarantees that Claude only sees the rest, in files and in git history alike, and Claude still commits.
+Use Claude Code on repositories that contain code it must never read. You list in a `.claudesandbox` file what Claude may see, and keep typing `claude`: the operating system guarantees that Claude only sees the rest, in files and in git history alike, and Claude still commits.
 
 - **Enforced by the OS, not by the model.** Every `claude` session runs in an OS sandbox ([`srt`](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime): Seatbelt on macOS, bubblewrap on Linux). Protected content is not on Claude's disk at all, so no tool, script or `git show` can reach it, even if a prompt injection tells Claude to try.
 - **Git keeps working.** Claude works in a filtered copy of your repository with the same commits and SHAs. It reads history, commits on your branch, and you fetch its work with `git fetch claude`.
@@ -97,7 +97,7 @@ Every `claude` session runs in the sandbox, and shows it. At each launch, the wr
 ```
 🔒 claude-secure-sandbox
 
-This repository is protected: its .claudesandbox lists protected paths.
+This repository is protected: Claude only sees the [visible] paths of its .claudesandbox.
 
    Hidden from Claude:  core/engine, licensing/keys.go
    Claude works on:     a copy of this repository, branch feature-x
@@ -135,11 +135,11 @@ The real binary stays available as `claude-unsandboxed`, for the rare session th
 Commit a `.claudesandbox` file at the repository root. It has three sections, all optional:
 
 ```
-[protected]
-# a directory: everything below it, at any depth
-core/engine/
-# a single file
-licensing/keys.go
+[visible]
+# everything else is hidden from Claude
+src/
+tests/
+package.json
 
 [path]
 ~/.m2
@@ -148,12 +148,12 @@ licensing/keys.go
 registry.npmjs.org
 ```
 
-- **`[protected]`**: what Claude must never read. Paths are relative to the root; a directory protects everything below it. Literal paths only: no `*`, `?`, `[` or `!`.
+- **`[visible]`**: the only paths Claude may see in the repository. Everything else is hidden, including what you add later. Paths are relative to the root; a directory shows everything below it. Literal paths only: no `*`, `?`, `[` or `!`. Without this section, nothing is hidden: Claude works directly in your folder.
 - **`[path]`**: what Claude may read beyond the defaults, such as an SDK or a package cache. Absolute or `~/...`, read only.
 - **`[domain]`**: the network domains Claude may reach beyond Anthropic's, such as a package registry.
 - Lines starting with `#` are comments. A `#` after an entry is part of it: put comments on their own line.
 
-The first time a `[path]` or a `[domain]` entry appears, the wrapper asks you before Claude starts:
+Every section is an allowlist: what is not listed stays closed. The first time an entry appears, the wrapper asks you before Claude starts:
 
 ```
 claude-secure-sandbox: .claudesandbox asks for access Claude does not have by default:
@@ -161,7 +161,7 @@ claude-secure-sandbox: .claudesandbox asks for access Claude does not have by de
 claude-secure-sandbox: allow it? [y/N]
 ```
 
-Claude can edit this file, so nothing it adds there is granted without your answer. In the same way, removing a protected path asks you first. Some entries are always refused: git hosts, this computer (`localhost`), and paths that hold credentials, temp files or other protected code.
+Claude can edit this file, so nothing it adds there is granted without your answer. Removing an entry, or hiding more, asks nothing. Some entries are always refused: git hosts, this computer (`localhost`), and paths that hold credentials, temp files or other protected code.
 
 There is no other configuration: the wrapper does not read any settings file in your home folder.
 
@@ -238,7 +238,7 @@ Everything else is in the [architecture document](docs/ARCHITECTURE.md):
 
 - [what Claude sees](docs/ARCHITECTURE.md#what-claude-sees) in its copy, and why some public files are absent;
 - [what happens to the branches](docs/ARCHITECTURE.md#branches-at-a-new-session) when you run `claude` again, and the question asked when your branch and Claude's have diverged;
-- [the `.claudesandbox` file](docs/ARCHITECTURE.md#5-the-claudesandbox-file): adding or removing a protected path, opening a path or a domain;
+- [the `.claudesandbox` file](docs/ARCHITECTURE.md#5-the-claudesandbox-file): what Claude sees in the repository, opening a path or a domain;
 - [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-session-modes), and [what Claude can read on the rest of the computer](docs/ARCHITECTURE.md#reading-a-denylist);
 - [why there is no configuration file](docs/ARCHITECTURE.md#10-configuration), [troubleshooting](docs/ARCHITECTURE.md#troubleshooting) and [limits](docs/ARCHITECTURE.md#14-limits-and-troubleshooting).
 

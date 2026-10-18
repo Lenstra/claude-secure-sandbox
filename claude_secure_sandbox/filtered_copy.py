@@ -12,7 +12,7 @@ from typing import List, Set, Tuple
 from .common import (EMPTY_BLOB, NULL_OID, PLACEHOLDER_TEXT, SANDBOX_FILE, GitError,
                      die, log, read_lines, stamp, warn, write_lines, write_text)
 from .context import Context
-from .protect import is_protected_path, sparse_escape
+from .protect import is_visible, sparse_escape
 
 _FILE_MODES = ("100644", "100755", "120000")
 
@@ -52,7 +52,7 @@ def write_spec(ctx: Context) -> str:
     if not os.path.isdir(spec_git):
         if subprocess.run(["git", "init", "-q", "--bare", "--template=", spec_git]).returncode:
             die(f"init {spec_git}")
-    spec = "/*\n" + "".join(f"!/{sparse_escape(p)}\n" for p in ctx.protected)
+    spec = "".join(f"/{sparse_escape(p)}\n" for p in [SANDBOX_FILE] + ctx.visible)
     proc = subprocess.run(["git", "hash-object", "-w", "--stdin"], input=spec, env=env,
                           stdout=subprocess.PIPE, encoding="utf-8")
     if proc.returncode:
@@ -124,9 +124,10 @@ def fetch_from_dev(ctx: Context) -> List[str]:
 
 
 def _log_protected_paths(ctx: Context, revs: List[str]) -> str:
-    """git log --raw restricted to protected paths. --full-history walks every
-    side branch, including merges that discarded it."""
-    specs = [f":(top,literal){p}" for p in ctx.protected]
+    """git log --raw restricted to hidden paths: everything except [visible].
+    --full-history walks every side branch, including merges that discarded
+    it."""
+    specs = [":/"] + [f":(top,exclude,literal){p}" for p in [SANDBOX_FILE] + ctx.visible]
     return ctx.git_dev.out(
         "-c", "diff.renames=false", "-c", "log.showSignature=false",
         "log", "--stdin", "--format=", "--raw", "--no-abbrev", "--no-renames", "--root",
@@ -135,7 +136,7 @@ def _log_protected_paths(ctx: Context, revs: List[str]) -> str:
 
 
 def scan_protected_blobs(ctx: Context, tips: List[str]) -> Set[str]:
-    """Fingerprints of every content that existed under a protected path, in
+    """Fingerprints of every content that existed under a hidden path, in
     the commits that are new since the last scan. Added to
     state/protected-blobs; returns the blobs found by this scan."""
     old = read_lines(ctx.state_file("host-tips"))
@@ -255,13 +256,13 @@ def prepare_copy(ctx: Context) -> None:
     rebuild = ""
     if not os.path.isdir(ctx.copy_git):
         rebuild = "init"
-    elif old_hash != ctx.protect_hash:
+    elif old_hash != ctx.visible_hash:
         rebuild = "protect-file"
     elif not check_copy_integrity(ctx):
         rebuild = "integrity"
     ctx.spec = write_spec(ctx)
     messages = {
-        "protect-file": (log, f"the protected paths of {SANDBOX_FILE} changed: rebuilding the copy and archiving sessions"),
+        "protect-file": (log, f"the [visible] paths of {SANDBOX_FILE} changed: rebuilding the copy and archiving sessions"),
         "integrity": (warn, "the copy's .git was tampered with: rebuilding"),
         "verify": (warn, "protected content found in the copy: rebuilding"),
         "init": (log, "creating the filtered copy (first run, may take a while)"),
@@ -284,7 +285,7 @@ def prepare_copy(ctx: Context) -> None:
                 install_placeholders(ctx, new)
                 known = set(read_lines(ctx.state_file("host-tips")))
                 write_lines(ctx.state_file("host-tips"), sorted(known | set(tips)))
-                write_text(ctx.state_file("protect-hash"), ctx.protect_hash + "\n")
+                write_text(ctx.state_file("protect-hash"), ctx.visible_hash + "\n")
                 return
         if attempt == 2:
             break
@@ -343,17 +344,16 @@ def archive_copy(ctx: Context, reason: str) -> None:
 
 
 def write_sparse_patterns(ctx: Context, commit: str) -> List[str]:
-    """Sparse-checkout patterns: everything except protected paths and public
-    files whose content is hidden at the given commit. Returns those public
-    files."""
+    """Sparse-checkout patterns: the [visible] paths, except files whose
+    content is hidden at the given commit. Returns those files."""
     hidden = set(read_lines(ctx.state_file("protected-blobs")))
-    lines = ["/*"] + [f"!/{sparse_escape(p)}" for p in ctx.protected]
+    lines = [f"/{sparse_escape(p)}" for p in [SANDBOX_FILE] + ctx.visible]
     public = []
     for entry in ctx.git_copy.out("ls-tree", "-r", "-z", commit).split("\0"):
         if not entry:
             continue
         meta, path = entry.split("\t", 1)
-        if meta.split(" ")[2] in hidden and not is_protected_path(ctx.protected, path):
+        if meta.split(" ")[2] in hidden and is_visible(ctx.visible, path):
             lines.append(f"!/{sparse_escape(path)}")
             public.append(path)
     target = os.path.join(ctx.copy_git, "info", "sparse-checkout")

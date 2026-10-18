@@ -2,9 +2,9 @@
 
 Every session runs Claude Code inside a sandbox (srt), where every protected
 repository of the computer is hidden. In a repository whose .claudesandbox
-lists [protected] paths (protected mode), Claude works on a filtered copy of
-it, without them. Anywhere else (directory mode), Claude works in the
-directory itself.
+has a [visible] section (protected mode), Claude works on a filtered copy of
+it, with only the paths listed there. Anywhere else (directory mode), Claude
+works in the directory itself.
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ from . import claude_config, filtered_copy, sandbox, scan, session
 from .common import (LEGACY_PROTECT_FILE, SANDBOX_FILE, Lock, check_deps, die, find_real_claude, find_srt,
                      log, path_within, realpath, state_root, volume_roots, warn)
 from .context import Context
-from .protect import (confirm_access, history_protected, is_protected_path, keep_removed_protections,
-                      load_sandbox_file, protect_hash, read_protected)
+from .protect import (confirm_access, confirm_visible, ever_protected, hidden_roots, is_visible,
+                      leads_to_visible, load_sandbox_file, read_visible, visible_hash)
 
 # Commands that do not open a session: no sandbox.
 SESSIONLESS = {"-v", "--version", "-h", "--help", "update", "doctor", "mcp", "config", "plugin",
@@ -60,7 +60,7 @@ def launch(ctx: Context, cwd: str, args: List[str]) -> int:
 
 
 def run_directory_mode(ctx: Context, cwd: str, args: List[str]) -> int:
-    """No protected path here: Claude works directly in the directory (the
+    """Nothing protected here: Claude works directly in the directory (the
     repository root, or the current directory outside a repository)."""
     ctx.directory_mode = True
     # A directory that holds the home directory (or other disks) is readable,
@@ -96,21 +96,15 @@ def main(root: str, args: List[str]) -> int:
     ctx.dev_root = realpath(toplevel) if toplevel else cwd
 
     if os.path.isfile(os.path.join(ctx.dev_root, LEGACY_PROTECT_FILE)):
-        die(f"{LEGACY_PROTECT_FILE} is replaced by {SANDBOX_FILE}: rename it, "
-            "and add a [protected] line above its paths")
-    if toplevel:
-        protected_now = read_protected(ctx.dev_root, ctx.git_dev)
-        history = history_protected(ctx.git_dev)
-    else:
-        requested = load_sandbox_file(os.path.join(ctx.dev_root, SANDBOX_FILE))
-        if requested.errors:
-            die(f"invalid {SANDBOX_FILE}:" + "".join(f"\n  {e}" for e in requested.errors))
-        if requested.protected:
-            die(f"{SANDBOX_FILE} lists [protected] paths, but this directory is not a git repository")
-        protected_now, history = [], set()
-    # A repository that was ever protected stays in protected mode: removing
-    # every protection takes the developer's confirmation too.
-    protected_mode = bool(protected_now or history)
+        die(f"{LEGACY_PROTECT_FILE} is replaced by {SANDBOX_FILE}: list under a [visible] line "
+            "what Claude may see, everything else is hidden")
+    current = read_visible(ctx.dev_root)
+    if not toplevel and current.has_visible:
+        die(f"{SANDBOX_FILE} has a [visible] section, but this directory is not a git repository")
+    was_protected = bool(toplevel) and ever_protected(ctx.git_dev)
+    # A repository that was ever protected stays in protected mode until the
+    # developer confirms otherwise (confirm_visible).
+    protected_mode = current.has_visible or was_protected
 
     home = os.environ["HOME"]
     check_deps()
@@ -144,15 +138,18 @@ def main(root: str, args: List[str]) -> int:
         warn("submodules are not supported (v1): their content will be missing from the copy")
     ctx.dev_git_common = common_dir
 
-    ctx.protected = keep_removed_protections(ctx.git_dev, common_dir, protected_now, history)
-    if not ctx.protected:
+    protected_mode, ctx.visible = confirm_visible(common_dir, current, was_protected)
+    if not protected_mode:
         return run_directory_mode(ctx, cwd, args)
-    ctx.protect_hash = protect_hash(ctx.protected)
+    ctx.visible_hash = visible_hash(ctx.visible)
+    files = ctx.git_dev.value("ls-tree", "-r", "-z", "--name-only", "HEAD").split("\0")
+    ctx.hidden, ctx.hidden_dirs = hidden_roots(ctx.visible, [f for f in files if f])
 
     rel = os.path.relpath(cwd, ctx.dev_root)
     rel = "" if rel == "." else rel
-    if rel and is_protected_path(ctx.protected, rel):
-        die(f"{rel} is protected by {SANDBOX_FILE}: run claude from a directory that is not protected")
+    if not (is_visible(ctx.visible, rel) or leads_to_visible(ctx.visible, rel)):
+        die(f"{rel} is hidden from Claude (not under [visible] in {SANDBOX_FILE}): "
+            "run claude from a directory Claude can see")
 
     resume = any(a in RESUME or a.startswith("--resume=") for a in args)
 

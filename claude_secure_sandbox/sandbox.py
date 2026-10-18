@@ -262,7 +262,7 @@ def write_srt_settings(ctx: Context) -> None:
     deny_write_protected = [r for r in ctx.protected_elsewhere if path_within(ctx.work, r)]
     deny_write = [] if ctx.read_only_root else [os.path.join(ctx.copy_git, p) for p in LOCKED_GIT_PATHS]
     deny_write.append(os.path.join(ctx.work, SANDBOX_FILE))
-    deny_write += [os.path.join(ctx.work, p) for p in ctx.protected] + deny_write_protected
+    deny_write += [os.path.join(ctx.work, p) for p in ctx.hidden] + deny_write_protected
     if platform.system() == "Linux":
         # bubblewrap denies a path by mounting over it: an absent path would
         # appear, on the host too, as an empty file during the session (git
@@ -270,11 +270,13 @@ def write_srt_settings(ctx: Context) -> None:
         # empty beforehand; the locked files that are absent are checked after
         # the session instead (neutralize_git_files). A mount point cannot be
         # renamed or removed, so writable directories need no anchor.
-        # Protected paths, absent from the copy, are created as empty
-        # directories for the same reason (git ignores empty directories).
+        # Hidden directories, absent from the copy, are created empty for the
+        # same reason (git ignores empty directories). A hidden file cannot
+        # be: git would see a directory in its place. It is not locked; git
+        # refuses to add a file outside the visible paths anyway.
         if not ctx.read_only_root and os.path.isdir(ctx.copy_git) and not os.path.islink(ctx.copy_git):
             targets = [os.path.join(ctx.copy_git, d) for d in LOCKED_GIT_DIRS]
-            targets += [os.path.join(ctx.work, p) for p in ctx.protected]
+            targets += [os.path.join(ctx.work, p) for p in ctx.hidden_dirs]
             for d in targets:
                 if path_within(ctx.work, realpath(os.path.dirname(d))):
                     try:
@@ -349,7 +351,7 @@ def write_system_prompt(ctx: Context) -> None:
               else "You work directly in this directory, and can read and write it:")
     template = (template.replace("@PLACEHOLDER@", PLACEHOLDER_TEXT).replace("@SANDBOX_FILE@", SANDBOX_FILE)
                 .replace("@ROOT@", ctx.work).replace("@ACCESS@", access))
-    paths = "\n".join(f"- `{p}`" for p in ctx.protected)
+    paths = "\n".join(f"- `{p}`" for p in ctx.hidden)
     lines = [paths if line == "@PROTECTED_PATHS@" else line for line in template.split("\n")]
     write_text(os.path.join(ctx.run_dir, "system-prompt.md"), "\n".join(lines))
 

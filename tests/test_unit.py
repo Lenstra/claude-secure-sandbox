@@ -7,7 +7,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from claude_secure_sandbox.common import path_within  # noqa: E402
-from claude_secure_sandbox.protect import SandboxFile, is_protected_path, normalize, sparse_escape  # noqa: E402
+from claude_secure_sandbox.protect import (SandboxFile, hidden_roots, is_visible, leads_to_visible,  # noqa: E402
+                                           normalize, sparse_escape)
 from claude_secure_sandbox.sandbox import domains_overlap, local_destination, url_host  # noqa: E402
 
 
@@ -33,8 +34,8 @@ class NormalizeTest(unittest.TestCase):
             ".git/config": ".git path",
             "sub/.git/x": ".git path",
             ".": "outside the repository root",
-            "./": "whole repository",
-            ".claudesandbox": "cannot protect itself",
+            "./": "the whole repository",
+            ".claudesandbox": "always visible",
         }
         for line, message in cases.items():
             with self.subTest(line=line):
@@ -50,13 +51,6 @@ class PathTest(unittest.TestCase):
         self.assertFalse(path_within("/a/b", "/a/bc"))
         self.assertFalse(path_within("/a/b/c", "/a/b"))
 
-    def test_is_protected_path(self):
-        protected = ["core", "lib/deep/core"]
-        self.assertTrue(is_protected_path(protected, "core/x.c"))
-        self.assertTrue(is_protected_path(protected, "lib/deep/core"))
-        self.assertFalse(is_protected_path(protected, "lib/deep/corelib"))
-        self.assertFalse(is_protected_path(protected, "src/core"))
-
     def test_sparse_escape(self):
         self.assertEqual(sparse_escape("a[1]*?.txt"), r"a\[1\]\*\?.txt")
         self.assertEqual(sparse_escape("!x"), r"\!x")
@@ -66,10 +60,11 @@ class PathTest(unittest.TestCase):
 
 class SandboxFileTest(unittest.TestCase):
     def test_sections(self):
-        f = SandboxFile("# comment\n[protected]\nsecret/\n\n[path]\n~/.m2\n/opt/sdk/\n"
+        f = SandboxFile("# comment\n[visible]\nsrc/\n\n[path]\n~/.m2\n/opt/sdk/\n"
                         "[domain]\nRegistry.npmjs.org\n*.example.com:8443\n")
         self.assertEqual(f.errors, [])
-        self.assertEqual(f.protected, {"secret"})
+        self.assertTrue(f.has_visible)
+        self.assertEqual(f.visible, {"src"})
         self.assertEqual(f.paths, {os.path.expanduser("~/.m2"), "/opt/sdk"})
         self.assertEqual(f.domains, {"registry.npmjs.org", "*.example.com:8443"})
 
@@ -84,13 +79,38 @@ class SandboxFileTest(unittest.TestCase):
             "[path]\n~/*.jar\n": "pattern not supported",
             "[domain]\n*\n": "not allowed",
             "[domain]\nhttps://x.com/\n": "invalid domain",
-            "[protected]\n/etc\n": "absolute path",
+            "[visible]\n/etc\n": "absolute path",
+            "[protected]\nsecret\n": "replaced by [visible]",
         }
         for content, message in cases.items():
             with self.subTest(content=content):
                 errors = SandboxFile(content).errors
                 self.assertEqual(len(errors), 1)
                 self.assertIn(message, errors[0])
+
+
+class VisibleTest(unittest.TestCase):
+    def test_empty_section_hides_everything(self):
+        f = SandboxFile("[visible]\n")
+        self.assertTrue(f.has_visible)
+        self.assertEqual(f.visible, set())
+        self.assertFalse(SandboxFile("[domain]\nx.org\n").has_visible)
+
+    def test_visible(self):
+        visible = ["src", "lib/public"]
+        self.assertTrue(is_visible(visible, "src/a.c"))
+        self.assertTrue(is_visible(visible, ".claudesandbox"))
+        self.assertFalse(is_visible(visible, "srcx/a.c"))
+        self.assertFalse(is_visible(visible, "lib"))
+        self.assertTrue(leads_to_visible(visible, "lib"))
+        self.assertTrue(leads_to_visible(visible, ""))
+        self.assertFalse(leads_to_visible(visible, "core"))
+
+    def test_hidden_roots(self):
+        files = ["src/a.c", "core/x.c", "core/y/z.c", "lib/public/p.c", "lib/secret/s.c", "top.txt",
+                 ".claudesandbox"]
+        self.assertEqual(hidden_roots(["src", "lib/public"], files),
+                         (["core", "lib/secret", "top.txt"], ["core", "lib/secret"]))
 
 
 class UrlHostTest(unittest.TestCase):

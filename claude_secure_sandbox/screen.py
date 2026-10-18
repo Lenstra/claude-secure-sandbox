@@ -39,9 +39,9 @@ def confirm_session(ctx: Context) -> bool:
     others_text = ", ".join(others[:3]) + (f" and {len(others) - 3} more" if len(others) > 3 else "")
     if not ctx.directory_mode:
         branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
-        hidden = ", ".join(ctx.protected[:5]) + (f" and {len(ctx.protected) - 5} more"
-                                                 if len(ctx.protected) > 5 else "")
-        intro = f"This repository is protected: its {SANDBOX_FILE} lists protected paths."
+        hidden = ", ".join(ctx.hidden[:5]) + (f" and {len(ctx.hidden) - 5} more"
+                                              if len(ctx.hidden) > 5 else "")
+        intro = f"This repository is protected: Claude only sees the [visible] paths of its {SANDBOX_FILE}."
         lines = [
             f"Hidden from Claude:  {hidden}",
             f"Claude works on:     a copy of this repository, branch {branch}",

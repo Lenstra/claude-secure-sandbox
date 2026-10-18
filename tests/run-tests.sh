@@ -113,7 +113,7 @@ git init -q "$D"
   echo "DUP-SECRET" > src/dup.txt
   : > secret/empty.txt
   : > src/empty.txt
-  printf '[protected]\n# proprietary code\nsecret/\nlib/deep/core\n' > "$PF"
+  printf '[visible]\n# everything else is hidden: secret/, lib/deep/core\nsrc/\nlib/deep/public\n' > "$PF"
   git add -A && git commit -qm c1
   git mv src/later.txt secret/later.txt
   echo "SECRET-TWO" > secret/s.txt
@@ -129,6 +129,8 @@ git init -q "$D"
   git branch -q -D side
   git branch -q other
 )
+# The developer confirmed these paths at a first launch (tested further down).
+mkdir -p "$D/.git/claude-secure-sandbox" && printf 'lib/deep/public\nsrc\n' > "$D/.git/claude-secure-sandbox/visible"
 SECRETS='SECRET-ONE SECRET-TWO MOVED-SECRET DEEP-SECRET DUP-SECRET SIDE-COPY FAKE-SSH-KEY'
 
 # The developer signs their commits with an SSH key, which must stay out of
@@ -376,7 +378,7 @@ check "choice 2: quit to integrate first" grep -q "integrate Claude's commits (g
 check_not "choice 2: claude not started" grep -q '^SANDBOXED' "$T/out/last"
 run_claude_answer 1 "$T/fakebin/s-dev.sh"
 check "choice 1: backup announced" grep -q "Claude's main kept: git fetch claude refs/backup/" "$T/out/last"
-check "start screen says why" grep -q "This repository is protected: its .claudesandbox lists protected paths." "$T/out/last"
+check "start screen says why" grep -q "This repository is protected: Claude only sees the \[visible\] paths of its .claudesandbox." "$T/out/last"
 check "start screen lists what is hidden" grep -q "Hidden from Claude:  lib/deep/core, secret" "$T/out/last"
 if [ "$OS" = Darwin ]; then
   ( cd "$D" && sleep 3 | CS_TEST_SCENARIO=$T/fakebin/s-dev.sh script -q /dev/null claude ) > "$T/out/cancel" 2>&1
@@ -439,8 +441,8 @@ run_claude "$T/fakebin/s5.sh"
 check "file is public before protection" grep -q '^IN-OK' "$T/out/last"
 (
   cd "$D" || exit 1
-  printf 'src/private\n' >> "$PF"
-  git commit -qam "protect src/private"
+  printf '[visible]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\n' > "$PF"
+  git commit -qam "hide src/private"
 )
 cat > "$T/fakebin/s6.sh" <<'EOF'
 if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file --batch-all-objects --batch-check='%(objectname)' |
@@ -451,20 +453,21 @@ else
 fi
 EOF
 run_claude "$T/fakebin/s6.sh"
-check "rebuild announced" grep -q "protected paths of $PF changed" "$T/out/last"
+check "rebuild announced" grep -q "\[visible\] paths of $PF changed" "$T/out/last"
+check_not "narrowing [visible] asks nothing" grep -q "could not see before" "$T/out/last"
 check "newly protected path removed from history" grep -q '^IN-OK' "$T/out/last"
 check "archive created" sh -c "ls '$COPY/archive' | grep -q protect-file"
 
-section "protection removed by one of Claude's commits"
+section "[visible] widened by one of Claude's commits"
 cat > "$T/fakebin/s7.sh" <<EOF
-blob=\$(printf '[protected]\nlib/deep/core\nsrc/private\n' | git hash-object -w --stdin)
+blob=\$(printf '[visible]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\nsecret\n' | git hash-object -w --stdin)
 git update-index --cacheinfo 100644,\$blob,$PF
-git commit -qm "refactor" || echo "IN-FAIL commit dropping secret"
+git commit -qm "refactor" || echo "IN-FAIL commit showing secret"
 EOF
 run_claude "$T/fakebin/s7.sh"
 collect
 git -C "$D" pull -q --ff-only claude main
-check "the developer merged the change" sh -c "! grep -q secret '$D/$PF'"
+check "the developer merged the change" grep -qx secret "$D/$PF"
 cat > "$T/fakebin/s-hidden.sh" <<'EOF'
 if [ -e secret/s.txt ]; then echo "IN-FAIL secret still hidden"; else echo "IN-OK secret still hidden"; fi
 EOF
@@ -472,22 +475,22 @@ cat > "$T/fakebin/s-visible.sh" <<'EOF'
 if grep -q SECRET-THREE secret/s.txt 2>/dev/null; then echo "IN-OK unprotected path visible"; else echo "IN-FAIL unprotected path visible"; fi
 EOF
 run_claude "$T/fakebin/s-hidden.sh"
-check "removal detected" grep -q "no longer under \[protected\] in $PF" "$T/out/last"
-check "without a terminal: kept protected" grep -q "no terminal to confirm: they stay protected" "$T/out/last"
+check "widening detected" grep -q "shows Claude paths it could not see before" "$T/out/last"
+check "without a terminal: kept hidden" grep -q "no terminal to confirm: they stay hidden" "$T/out/last"
 collect
 run_claude_answer n "$T/fakebin/s-hidden.sh"
-check "answer no: kept protected" grep -q "they stay protected; restore them" "$T/out/last"
+check "answer no: kept hidden" grep -q "they stay hidden; the question comes back" "$T/out/last"
 collect
 run_claude_answer y "$T/fakebin/s-visible.sh"
-check "answer yes: protection removed" grep -q "protection removed" "$T/out/last"
+check "answer yes: shown" grep -q "paths shown" "$T/out/last"
 collect
-check "confirmation stored in the developer's .git" grep -qx secret "$D/.git/claude-secure-sandbox/unprotected"
+check "confirmation stored in the developer's .git" grep -qx secret "$D/.git/claude-secure-sandbox/visible"
 run_claude "$T/fakebin/s-visible.sh"
-check_not "no question once confirmed" grep -q "no longer under" "$T/out/last"
-( cd "$D" && printf 'secret\n' >> "$PF" && git commit -qam "protect secret again" )
+check_not "no question once confirmed" grep -q "could not see before" "$T/out/last"
+( cd "$D" && printf '[visible]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\n' > "$PF" && git commit -qam "hide secret again" )
 run_claude "$T/fakebin/s-hidden.sh"
 collect
-check "confirmation dropped when protected again" sh -c "! grep -qx secret '$D/.git/claude-secure-sandbox/unprotected'"
+check "confirmation dropped when hidden again" sh -c "! grep -qx secret '$D/.git/claude-secure-sandbox/visible'"
 
 # --- escape attempts ------------------------------------------------------------------
 
@@ -611,7 +614,7 @@ fi
 section "launch cases"
 mkdir -p "$T/plain/sub/protected"
 git init -q "$T/plain/sub/protected"
-printf '[protected]\nx\n' > "$T/plain/sub/protected/$PF"
+printf '[visible]\nx\n' > "$T/plain/sub/protected/$PF"
 cat > "$T/fakebin/s-below.sh" <<EOF
 if cat "$T/plain/sub/protected/$PF" >/dev/null 2>&1; then echo "IN-FAIL a protected repository below is hidden"; else echo "IN-OK a protected repository below is hidden"; fi
 echo x > "$T/plain/sub/protected/new" 2>/dev/null
@@ -701,12 +704,12 @@ collect
 out=$(cd "$D" && claude --version 2>&1)
 check "--version without sandbox" sh -c "printf '%s' '$out' | grep -q '^UNSANDBOXED --version'"
 out=$(cd "$D/secret" && claude 2>&1)
-check "refused from a protected directory" sh -c "printf '%s' '$out' | grep -q 'is protected by'"
+check "refused from a hidden directory" sh -c "printf '%s' '$out' | grep -q 'is hidden from Claude'"
 mkdir -p "$T/plain/badrepo" && git init -q "$T/plain/badrepo"
-printf '[protected]\n/etc/passwd\n' > "$T/plain/badrepo/$PF"
+printf '[visible]\n/etc/passwd\n' > "$T/plain/badrepo/$PF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
 check "absolute path refused in the protection file" sh -c "printf '%s' '$out' | grep -q 'absolute path not allowed'"
-printf '[protected]\n../outside\n' > "$T/plain/badrepo/$PF"
+printf '[visible]\n../outside\n' > "$T/plain/badrepo/$PF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
 check ".. refused in the protection file" sh -c "printf '%s' '$out' | grep -q 'outside the repository root'"
 mkdir -p "$COPY/state/lock"
@@ -719,17 +722,20 @@ rm -rf "$COPY/state/lock"
 printf 'secret\n' > "$T/plain/badrepo/$PF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
 check "a line outside a section is refused" sh -c "printf '%s' '$out' | grep -q 'outside a section'"
-printf '[protected]\nsecret\n[network]\nx.com\n' > "$T/plain/badrepo/$PF"
+printf '[visible]\nsrc\n[network]\nx.com\n' > "$T/plain/badrepo/$PF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
 check "an unknown section is refused" sh -c "printf '%s' '$out' | grep -q 'unknown section'"
+printf '[protected]\nsecret\n' > "$T/plain/badrepo/$PF"
+out=$(cd "$T/plain/badrepo" && claude 2>&1)
+check "[protected] is refused, with the way to convert it" sh -c "printf '%s' '$out' | grep -q 'replaced by \[visible\]'"
 rm "$T/plain/badrepo/$PF"
 echo "core" > "$T/plain/badrepo/.claudeprotected"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
 check "an earlier .claudeprotected stops the launch" sh -c "printf '%s' '$out' | grep -q 'is replaced by .claudesandbox'"
 rm "$T/plain/badrepo/.claudeprotected"
-mkdir -p "$T/plain/nogit-protected" && printf '[protected]\nx\n' > "$T/plain/nogit-protected/$PF"
+mkdir -p "$T/plain/nogit-protected" && printf '[visible]\nx\n' > "$T/plain/nogit-protected/$PF"
 out=$(cd "$T/plain/nogit-protected" && claude 2>&1)
-check "[protected] outside a git repository is refused" sh -c "printf '%s' '$out' | grep -q 'not a git repository'"
+check "[visible] outside a git repository is refused" sh -c "printf '%s' '$out' | grep -q 'not a git repository'"
 rm -rf "$T/plain/nogit-protected"
 
 section ".claudesandbox: access beyond the defaults"
@@ -774,21 +780,21 @@ E=$T/plain/everything-removed
 git init -q "$E" && (
   cd "$E" || exit 1
   mkdir -p core && echo "CORE-SECRET" > core/c.txt && echo pub > p.txt
-  printf '[protected]\ncore\n' > "$PF" && git add -A && git commit -qm init
+  printf '[visible]\np.txt\n' > "$PF" && git add -A && git commit -qm init
   printf '[domain]\nregistry.npmjs.org\n' > "$PF" && git commit -qam "no protection left"
 )
 cat > "$T/fakebin/s-removed.sh" <<'EOF'
 if [ -e core/c.txt ]; then echo "IN-FAIL a repository that was protected stays in protected mode"; else echo "IN-OK a repository that was protected stays in protected mode"; fi
 EOF
 ( cd "$E" && CS_TEST_SCENARIO=$T/fakebin/s-removed.sh claude ) < /dev/null > "$T/out/last" 2>&1
-check "removal of every protection detected" grep -q "no longer under \[protected\]" "$T/out/last"
+check "removal of every protection detected" grep -q "has no \[visible\] section any more" "$T/out/last"
 collect
 
 # --- uninstall ----------------------------------------------------------------------
 
 section "uninstall"
 cat > "$T/fakebin/s-unfetched.sh" <<'EOF'
-git checkout -q -b never-fetched && echo z > src/z.txt && git add src/z.txt && git commit -qm "never fetched"
+git checkout -q -b never-fetched && echo z >> src/a.txt && git commit -qam "never fetched"
 EOF
 run_claude "$T/fakebin/s-unfetched.sh"
 printf 'alias ll="ls -l"\nexport PATH="%s/bin:$PATH"\n' "$ROOT" > "$T/home/.zshrc"
