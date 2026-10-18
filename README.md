@@ -1,10 +1,10 @@
 # claude-secure-sandbox
 
-Use Claude Code on repositories that contain code it must never read. You list in a `.claudesandbox` file what Claude may see, and keep typing `claude`: the operating system guarantees that Claude only sees the rest, in files and in git history alike, and Claude still commits.
+Use Claude Code on repositories that contain code it must never read. You list in a `.claudesandbox` file what Claude may see, and keep typing `claude`: the operating system guarantees that Claude sees nothing else, in files and in git history alike, and Claude still commits.
 
 - **Enforced by the OS, not by the model.** Every `claude` session runs in an OS sandbox ([`srt`](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime): Seatbelt on macOS, bubblewrap on Linux). Protected content is not on Claude's disk at all, so no tool, script or `git show` can reach it, even if a prompt injection tells Claude to try.
 - **Git keeps working.** Claude works in a filtered copy of your repository with the same commits and SHAs. It reads history, commits on your branch, and you fetch its work with `git fetch claude`.
-- **Your other files stay hidden too.** Claude reads the system and the tools on your `PATH`, but nothing else in your home folder, on other disks or in temp files, unless a repository asks for it and you confirm. Other protected repositories, your credentials and your old Claude conversations are always hidden. Claude writes only in its working directory and its temp directory.
+- **Your other files stay hidden too.** Claude reads the system and the tools on your `PATH`, but nothing else in your home folder, on other disks or in temp files, unless a repository asks for it and you confirm. Other protected repositories, your credentials and your old Claude conversations are hidden. Claude writes only in its working directory and its temp directory.
 - **Native, no Docker.** No VM and no image: sessions start instantly, with Claude Code as installed on the machine.
 
 How it works and why it is built this way: [architecture document](docs/ARCHITECTURE.md).
@@ -196,7 +196,7 @@ claude                                          # 6. next session, from your lat
    - **You sign them:** your signing key never enters the sandbox, so Claude's commits are unsigned. `git cherry-pick -S feature-x..claude/feature-x` copies Claude's commits that are not in your branch yet after your latest commit, and signs each copy. It never rewrites a commit you already have, pushed or not.
 
    In both cases there is no merge commit; resolve conflicts, if any, as usual with git.
-5. **Push.** History on `origin` stays linear, without merge commits. With the rebase, commits of yours that were already pushed and come after Claude's are rewritten: push them with `--force-with-lease`. The cherry-pick never rewrites anything, so its push is always a normal one. CI builds and tests with the full code, protected paths included.
+5. **Push.** History on `origin` stays linear, without merge commits. With the rebase, commits of yours that were already pushed and come after Claude's are rewritten: push them with `--force-with-lease`. The cherry-pick never rewrites anything, so its push is always a normal one. CI builds and tests with the full code, hidden paths included.
 6. **Next session.** The wrapper sees that Claude's commits are in your branch, even as signed copies, and Claude starts from your latest commit. If you run `claude` before integrating them, Claude continues on its own commits; if both of you committed in between, the wrapper asks what to do ([branches at a new session](docs/ARCHITECTURE.md#branches-at-a-new-session)).
 
 `claude --continue` and `claude --resume` resume the previous conversation, with the copy as Claude left it.
@@ -209,7 +209,7 @@ claude                                          # 6. next session, from your lat
 `./uninstall.sh` changes nothing: it lists what to remove on your machine, with the exact paths and commands. Remove, in this order:
 
 1. **The PATH line** you added to your shell startup file (`export PATH=".../claude-secure-sandbox/bin:$PATH"`), then open a new shell: `claude` runs Claude Code directly.
-2. **In each repository you used it in**, the `claude` remote and your confirmed removals of protection.
+2. **In each repository you used it in**, the `claude` remote and what you confirmed Claude may see.
 
    ```bash
    git remote remove claude
@@ -233,7 +233,7 @@ Claude Code itself is not affected.
 
 Everything else is in the [architecture document](docs/ARCHITECTURE.md):
 
-- [what Claude sees](docs/ARCHITECTURE.md#what-claude-sees) in its copy, and why some public files are absent;
+- [what Claude sees](docs/ARCHITECTURE.md#what-claude-sees) in its copy, and why some visible files are absent;
 - [what happens to the branches](docs/ARCHITECTURE.md#branches-at-a-new-session) when you run `claude` again, and the question asked when your branch and Claude's have diverged;
 - [the `.claudesandbox` file](docs/ARCHITECTURE.md#5-the-claudesandbox-file): what Claude sees in the repository, opening a path or a domain;
 - [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-session-modes), and [what Claude can read on your computer](docs/ARCHITECTURE.md#reading-an-allowlist-where-users-files-live);
