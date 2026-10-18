@@ -9,7 +9,7 @@ if sys.version_info < (3, 9):
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, ROOT)
 
-from claude_secure_sandbox.common import die, find_real_claude, load_config  # noqa: E402
+from claude_secure_sandbox.common import die, find_real_claude  # noqa: E402
 
-real = find_real_claude(load_config(), ROOT) or die("claude binary not found on the PATH (or set claude_bin)")
+real = find_real_claude(ROOT) or die("claude binary not found on the PATH")
 os.execv(real, [real, *sys.argv[1:]])

@@ -9,7 +9,7 @@ import stat
 import subprocess
 from typing import List, Set, Tuple
 
-from .common import (EMPTY_BLOB, NULL_OID, PLACEHOLDER_TEXT, PROTECT_FILE, GitError,
+from .common import (EMPTY_BLOB, NULL_OID, PLACEHOLDER_TEXT, SANDBOX_FILE, GitError,
                      die, log, read_lines, stamp, warn, write_lines, write_text)
 from .context import Context
 from .protect import is_protected_path, sparse_escape
@@ -261,7 +261,7 @@ def prepare_copy(ctx: Context) -> None:
         rebuild = "integrity"
     ctx.spec = write_spec(ctx)
     messages = {
-        "protect-file": (log, f"{PROTECT_FILE} changed: rebuilding the copy and archiving sessions"),
+        "protect-file": (log, f"the protected paths of {SANDBOX_FILE} changed: rebuilding the copy and archiving sessions"),
         "integrity": (warn, "the copy's .git was tampered with: rebuilding"),
         "verify": (warn, "protected content found in the copy: rebuilding"),
         "init": (log, "creating the filtered copy (first run, may take a while)"),

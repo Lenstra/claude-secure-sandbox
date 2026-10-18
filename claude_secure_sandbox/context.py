@@ -1,4 +1,4 @@
-"""State of one wrapper run: configuration, paths and git command lines."""
+"""State of one wrapper run: paths, access and git command lines."""
 
 from __future__ import annotations
 
@@ -6,14 +6,13 @@ import os
 import re
 from typing import List, Optional
 
-from .common import (Config, Git, Lock, die, ensure_real_dir, git_copy, git_copy_raw,
+from .common import (Git, Lock, die, ensure_real_dir, git_copy, git_copy_raw,
                      git_dev, sha1, warn, write_text)
 
 
 class Context:
-    def __init__(self, root: str, config: Config, state_root: str):
+    def __init__(self, root: str, state_root: str):
         self.root = root
-        self.config = config
         self.state_root = state_root
         self.claude_home = os.path.join(state_root, "claude-home")
         self.real_claude = ""
@@ -25,8 +24,7 @@ class Context:
         self.placeholder = ""
         self.spec = ""
         self.fresh_copy = False
-        # Directory mode: no .claudeprotected; Claude works in dev_root itself,
-        # and nothing else of the user's is readable.
+        # Directory mode: no protected path; Claude works in dev_root itself.
         self.directory_mode = False
         # Protected repositories other than the session's, entirely hidden.
         self.protected_elsewhere: List[str] = []
@@ -34,6 +32,9 @@ class Context:
         self.read_only_root = False
         # Real paths of the ~/.claude items passed through to the sandbox.
         self.config_read: List[str] = []
+        # What the repository's .claudesandbox asks for, once confirmed.
+        self.granted_paths: List[str] = []
+        self.granted_domains: List[str] = []
         self.lock: Optional[Lock] = None
 
     @property

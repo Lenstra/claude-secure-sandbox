@@ -1,6 +1,6 @@
 # claude-secure-sandbox
 
-Use Claude Code on repositories that contain code it must never read. You list the sensitive paths in a `.claudeprotected` file and keep typing `claude`: the operating system guarantees that Claude only sees the rest, in files and in git history alike, and Claude still commits.
+Use Claude Code on repositories that contain code it must never read. You list the sensitive paths in a `.claudesandbox` file and keep typing `claude`: the operating system guarantees that Claude only sees the rest, in files and in git history alike, and Claude still commits.
 
 - **Enforced by the OS, not by the model.** Every `claude` session runs in an OS sandbox ([`srt`](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime): Seatbelt on macOS, bubblewrap on Linux). Protected content is not on Claude's disk at all, so no tool, script or `git show` can reach it, even if a prompt injection tells Claude to try.
 - **Git keeps working.** Claude works in a filtered copy of your repository with the same commits and SHAs. It reads history, commits on your branch, and you fetch its work with `git fetch claude`.
@@ -97,7 +97,7 @@ Every `claude` session runs in the sandbox, and shows it. At each launch, the wr
 ```
 🔒 claude-secure-sandbox
 
-This repository is protected: it has a .claudeprotected file.
+This repository is protected: its .claudesandbox lists protected paths.
 
    Hidden from Claude:  core/engine, licensing/keys.go
    Claude works on:     a copy of this repository, branch feature-x
@@ -110,7 +110,7 @@ This repository is protected: it has a .claudeprotected file.
 Press Enter to start Claude, or Ctrl-C to cancel:
 ```
 
-In a directory without a `.claudeprotected`, the screen starts with `No .claudeprotected here: Claude works directly in this folder.` and Claude edits that folder directly. Protected repositories elsewhere on the computer stay hidden, including one inside that folder.
+Where nothing is protected, the screen starts with `Nothing is protected here: Claude works directly in this folder.` and Claude edits that folder directly. Protected repositories elsewhere on the computer stay hidden, including one inside that folder.
 
 While Claude runs, the bottom line of Claude Code shows `🔒 sandboxed · protected repository my-repo · feature-x` (unless you already set your own status line).
 
@@ -130,23 +130,40 @@ The real binary stays available as `claude-unsandboxed`, for the rare session th
 > [!WARNING]
 > `claude-unsandboxed` runs Claude Code with no protection at all. Claude can then read every protected repository on your machine, its files and its git history, and anything else your user account can read, even when you start it from another directory.
 
-### Protect a repository
+### The `.claudesandbox` file
 
-Commit a `.claudeprotected` file at the repository root, one path per line:
+Commit a `.claudesandbox` file at the repository root. It has three sections, all optional:
 
 ```
+[protected]
 # a directory: everything below it, at any depth
 core/engine/
 # a single file
 licensing/keys.go
+
+[path]
+~/.m2
+
+[domain]
+registry.npmjs.org
 ```
 
-- Paths are relative to the root. A directory protects everything below it, at any depth; the trailing `/` is optional.
-- Literal paths only: no `*`, `?`, `[` or `!`. Absolute paths, `..`, `.git` and the file itself are refused.
-- Lines starting with `#` are comments.
+- **`[protected]`**: what Claude must never read. Paths are relative to the root; a directory protects everything below it. Literal paths only: no `*`, `?`, `[` or `!`.
+- **`[path]`**: what Claude may read beyond the defaults, such as an SDK or a package cache. Absolute or `~/...`, read only.
+- **`[domain]`**: the network domains Claude may reach beyond Anthropic's, such as a package registry.
+- Lines starting with `#` are comments. A `#` after an entry is part of it: put comments on their own line.
 
-> [!NOTE]
-> A `#` after a path is part of the path: put comments on their own line.
+The first time a `[path]` or a `[domain]` entry appears, the wrapper asks you before Claude starts:
+
+```
+claude-secure-sandbox: .claudesandbox asks for access Claude does not have by default:
+  domain registry.npmjs.org
+claude-secure-sandbox: allow it? [y/N]
+```
+
+Claude can edit this file, so nothing it adds there is granted without your answer. In the same way, removing a protected path asks you first. Some entries are always refused: git hosts, this computer (`localhost`), and paths that hold credentials, temp files or other protected code.
+
+There is no other configuration: the wrapper does not read any settings file in your home folder.
 
 That is all the setup a repository needs. Everything else is created by the wrapper, on your machine only.
 
@@ -202,19 +219,13 @@ claude                                          # 6. next session, from your lat
    rm -rf .git/claude-secure-sandbox
    ```
 
-3. **The wrapper's state**: Claude's copies, archives and sessions, and its copy of your Claude Code login.
+3. **The wrapper's state**: Claude's copies, archives and sessions, the access you confirmed, and its copy of your Claude Code login.
 
    ```bash
    rm -rf ~/.cache/claude-secure-sandbox
    ```
 
-4. **The configuration**, if you created one.
-
-   ```bash
-   rm -rf ~/.config/claude-secure-sandbox
-   ```
-
-5. **The tool itself**: the `claude-secure-sandbox` directory.
+4. **The tool itself**: the `claude-secure-sandbox` directory.
 
 Claude Code itself is not affected.
 
@@ -227,8 +238,8 @@ Everything else is in the [architecture document](docs/ARCHITECTURE.md):
 
 - [what Claude sees](docs/ARCHITECTURE.md#what-claude-sees) in its copy, and why some public files are absent;
 - [what happens to the branches](docs/ARCHITECTURE.md#branches-at-a-new-session) when you run `claude` again, and the question asked when your branch and Claude's have diverged;
-- [adding or removing a protected path](docs/ARCHITECTURE.md#5-the-claudeprotected-file);
+- [the `.claudesandbox` file](docs/ARCHITECTURE.md#5-the-claudesandbox-file): adding or removing a protected path, opening a path or a domain;
 - [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-session-modes), and [what Claude can read on the rest of the computer](docs/ARCHITECTURE.md#reading-a-denylist);
-- [configuration](docs/ARCHITECTURE.md#10-configuration), [troubleshooting](docs/ARCHITECTURE.md#troubleshooting) and [limits](docs/ARCHITECTURE.md#14-limits-and-troubleshooting).
+- [why there is no configuration file](docs/ARCHITECTURE.md#10-configuration), [troubleshooting](docs/ARCHITECTURE.md#troubleshooting) and [limits](docs/ARCHITECTURE.md#14-limits-and-troubleshooting).
 
 Tests: `npm test` (unit tests, then end-to-end tests in the real sandbox; `jq` required), and `npm run test:linux` for the same suite on Linux, in Docker.

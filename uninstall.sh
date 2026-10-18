@@ -5,12 +5,7 @@ set -u
 ROOT=$(cd -P "$(dirname "$0")" && pwd)
 NAME=claude-secure-sandbox
 
-CONFIG=${CLAUDE_SECURE_SANDBOX_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/$NAME/config.json}
-STATE=${CLAUDE_SECURE_SANDBOX_HOME:-}
-if [ -z "$STATE" ] && [ -f "$CONFIG" ]; then
-  STATE=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("state_dir") or "")' "$CONFIG" 2>/dev/null)
-fi
-STATE=${STATE:-$HOME/.cache/$NAME}
+STATE=${CLAUDE_SECURE_SANDBOX_HOME:-$HOME/.cache/$NAME}
 STATE=${STATE/#\~/$HOME}
 
 echo "$NAME: nothing has been removed. To uninstall, remove these yourself:"
@@ -66,18 +61,10 @@ if [ -n "$repos" ]; then
   printf '%s' "$repos"
 fi
 
-# State, configuration, the tool itself.
+# State, the tool itself.
 if [ -d "$STATE" ]; then
-  title "The wrapper's state: Claude's copies, archives and sessions, and its copy of your Claude Code login."
+  title "The wrapper's state: Claude's copies, archives and sessions, the access you confirmed, and its copy of your Claude Code login."
   echo "   rm -rf '$STATE'"
-fi
-if [ -f "$CONFIG" ]; then
-  title "The wrapper's configuration."
-  if [ "$(basename "$(dirname "$CONFIG")")" = "$NAME" ]; then
-    echo "   rm -rf '$(dirname "$CONFIG")'"
-  else
-    echo "   rm -f '$CONFIG'"
-  fi
 fi
 title "The tool itself."
 echo "   rm -rf '$ROOT'"

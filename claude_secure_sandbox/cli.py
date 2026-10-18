@@ -1,10 +1,10 @@
 """Entry point of the `claude` wrapper.
 
 Every session runs Claude Code inside a sandbox (srt), where every protected
-repository of the computer is hidden. In a repository with a .claudeprotected
-file at its root (protected mode), Claude works on a filtered copy of it,
-without the protected paths. Anywhere else (directory mode), Claude works in
-the directory itself.
+repository of the computer is hidden. In a repository whose .claudesandbox
+lists [protected] paths (protected mode), Claude works on a filtered copy of
+it, without them. Anywhere else (directory mode), Claude works in the
+directory itself.
 """
 
 from __future__ import annotations
@@ -16,11 +16,11 @@ import sys
 from typing import List, NoReturn
 
 from . import claude_config, filtered_copy, sandbox, scan, session
-from .common import (PROTECT_FILE, Lock, check_deps, die, find_real_claude, find_srt, log,
-                     load_config, path_within, realpath, state_root, volume_roots, warn)
+from .common import (LEGACY_PROTECT_FILE, SANDBOX_FILE, Lock, check_deps, die, find_real_claude, find_srt,
+                     log, path_within, realpath, state_root, volume_roots, warn)
 from .context import Context
-from .protect import (is_protected_path, keep_removed_protections,
-                      protect_hash, read_protect_file)
+from .protect import (confirm_access, history_protected, is_protected_path, keep_removed_protections,
+                      load_sandbox_file, protect_hash, read_protected)
 
 # Commands that do not open a session: no sandbox.
 SESSIONLESS = {"-v", "--version", "-h", "--help", "update", "doctor", "mcp", "config", "plugin",
@@ -44,10 +44,11 @@ def _sigterm(*_) -> NoReturn:
 
 def launch(ctx: Context, cwd: str, args: List[str]) -> int:
     """Prepares the sandbox and runs Claude Code in it, in either mode."""
+    requested = load_sandbox_file(os.path.join(ctx.dev_root, SANDBOX_FILE))
+    paths, domains = sandbox.check_access(ctx, sorted(requested.paths), sorted(requested.domains))
+    ctx.granted_paths, ctx.granted_domains = confirm_access(ctx.state, paths, domains)
     claude_config.sync_claude_config(ctx)
     claude_config.sync_claude_credentials(ctx)
-    if not ctx.directory_mode:
-        sandbox.copy_dependency_dirs(ctx)
     sandbox.write_gitconfig(ctx)
     sandbox.write_tool_links(ctx)
     sandbox.write_srt_settings(ctx)
@@ -59,7 +60,7 @@ def launch(ctx: Context, cwd: str, args: List[str]) -> int:
 
 
 def run_directory_mode(ctx: Context, cwd: str, args: List[str]) -> int:
-    """No .claudeprotected here: Claude works directly in the directory (the
+    """No protected path here: Claude works directly in the directory (the
     repository root, or the current directory outside a repository)."""
     ctx.directory_mode = True
     # A directory that holds the home directory (or other disks) is readable,
@@ -79,10 +80,8 @@ def run_directory_mode(ctx: Context, cwd: str, args: List[str]) -> int:
 
 
 def main(root: str, args: List[str]) -> int:
-    config = load_config()
-    ctx = Context(root, config, state_root(config))
-    ctx.real_claude = find_real_claude(config, root) or die(
-        "claude binary not found on the PATH (or set claude_bin)")
+    ctx = Context(root, state_root())
+    ctx.real_claude = find_real_claude(root) or die("claude binary not found on the PATH")
 
     if args and args[0] in SESSIONLESS:
         exec_real(ctx, args)
@@ -96,23 +95,35 @@ def main(root: str, args: List[str]) -> int:
     toplevel = _git_toplevel(cwd)
     ctx.dev_root = realpath(toplevel) if toplevel else cwd
 
-    home = os.environ["HOME"]
-    protected_mode = bool(toplevel) and os.path.isfile(os.path.join(ctx.dev_root, PROTECT_FILE))
+    if os.path.isfile(os.path.join(ctx.dev_root, LEGACY_PROTECT_FILE)):
+        die(f"{LEGACY_PROTECT_FILE} is replaced by {SANDBOX_FILE}: rename it, "
+            "and add a [protected] line above its paths")
+    if toplevel:
+        protected_now = read_protected(ctx.dev_root, ctx.git_dev)
+        history = history_protected(ctx.git_dev)
+    else:
+        requested = load_sandbox_file(os.path.join(ctx.dev_root, SANDBOX_FILE))
+        if requested.errors:
+            die(f"invalid {SANDBOX_FILE}:" + "".join(f"\n  {e}" for e in requested.errors))
+        if requested.protected:
+            die(f"{SANDBOX_FILE} lists [protected] paths, but this directory is not a git repository")
+        protected_now, history = [], set()
+    # A repository that was ever protected stays in protected mode: removing
+    # every protection takes the developer's confirmation too.
+    protected_mode = bool(protected_now or history)
 
+    home = os.environ["HOME"]
     check_deps()
-    ctx.srt = find_srt(config, root) or die(f'srt not found: run "npm ci" in {root}')
+    ctx.srt = find_srt(root) or die(f'srt not found: run "npm ci" in {root}')
     # Every other protected repository is hidden entirely: the whole computer
-    # is scanned at each launch (machine_scan false: only the home directory
-    # and the session's directory, for tests).
-    machine_scan = config.get("machine_scan", default=True)
-    if not isinstance(machine_scan, bool):
-        die("configuration: machine_scan must be true or false")
-    if machine_scan:
+    # is scanned at each launch. CLAUDE_SECURE_SANDBOX_SCAN=limited (tests)
+    # scans only the home directory and the session's directory.
+    if os.environ.get("CLAUDE_SECURE_SANDBOX_SCAN") == "limited":
+        roots = [home] if path_within(home, ctx.dev_root) else [home, ctx.dev_root]
+    else:
         if sys.stderr.isatty():
             log("looking for protected repositories on this computer...")
         roots = scan.scan_roots()
-    else:
-        roots = [home] if path_within(home, ctx.dev_root) else [home, ctx.dev_root]
     repos = scan.protected_repositories(ctx.state_root, roots)
     if protected_mode:
         nested = [r for r in repos if r != ctx.dev_root and path_within(ctx.dev_root, r)]
@@ -133,14 +144,15 @@ def main(root: str, args: List[str]) -> int:
         warn("submodules are not supported (v1): their content will be missing from the copy")
     ctx.dev_git_common = common_dir
 
-    current = read_protect_file(ctx.dev_root, ctx.git_dev)
-    ctx.protected = keep_removed_protections(ctx.git_dev, common_dir, current)
+    ctx.protected = keep_removed_protections(ctx.git_dev, common_dir, protected_now, history)
+    if not ctx.protected:
+        return run_directory_mode(ctx, cwd, args)
     ctx.protect_hash = protect_hash(ctx.protected)
 
     rel = os.path.relpath(cwd, ctx.dev_root)
     rel = "" if rel == "." else rel
     if rel and is_protected_path(ctx.protected, rel):
-        die(f"{rel} is protected by {PROTECT_FILE}: run claude from a directory that is not protected")
+        die(f"{rel} is protected by {SANDBOX_FILE}: run claude from a directory that is not protected")
 
     resume = any(a in RESUME or a.startswith("--resume=") for a in args)
 

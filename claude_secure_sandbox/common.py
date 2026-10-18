@@ -14,9 +14,12 @@ import time
 from typing import Iterable, List, NoReturn, Optional
 
 NAME = "claude-secure-sandbox"
-# File at the repository root that lists the protected paths.
-PROTECT_FILE = ".claudeprotected"
-PLACEHOLDER_TEXT = f"[{NAME}] hidden by {PROTECT_FILE}"
+# File at the repository root: protected paths, and what the sandbox may
+# reach beyond the defaults (paths to read, network domains).
+SANDBOX_FILE = ".claudesandbox"
+# Protection file of earlier versions: still marks a protected repository.
+LEGACY_PROTECT_FILE = ".claudeprotected"
+PLACEHOLDER_TEXT = f"[{NAME}] hidden by {SANDBOX_FILE}"
 # Empty blob: its content is known to everyone, so it is never hidden.
 EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
 NULL_OID = "0" * 40
@@ -161,55 +164,15 @@ def write_lines(path: str, lines: Iterable[str]) -> None:
     write_text(path, "".join(line + "\n" for line in lines))
 
 
-# --- configuration -------------------------------------------------------------
+# --- state ---------------------------------------------------------------------
 
 
-class Config:
-    def __init__(self, path: Optional[str], data: dict):
-        self.path = path
-        self.data = data
-
-    def get(self, *keys, default=None):
-        value = self.data
-        for key in keys:
-            if not isinstance(value, dict) or key not in value or value[key] is None:
-                return default
-            value = value[key]
-        return value
-
-    def string(self, *keys) -> Optional[str]:
-        value = self.get(*keys)
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            die(f"configuration: {'.'.join(keys)} must be a string")
-        return value
-
-    def paths(self, *keys) -> List[str]:
-        """Array of strings, with ~ expanded."""
-        value = self.get(*keys, default=[])
-        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-            die(f"configuration: {'.'.join(keys)} must be a list of strings")
-        return [expand_home(v) for v in value if v]
-
-
-def load_config() -> Config:
-    default_dir = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.environ["HOME"], ".config")
-    path = os.environ.get("CLAUDE_SECURE_SANDBOX_CONFIG") or os.path.join(default_dir, NAME, "config.json")
-    if not os.path.isfile(path):
-        return Config(None, {})
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        data = None
-    if not isinstance(data, dict):
-        die(f"unreadable or invalid configuration: {path}")
-    return Config(path, data)
-
-
-def state_root(config: Config) -> str:
-    root = os.environ.get("CLAUDE_SECURE_SANDBOX_HOME") or config.string("state_dir") or ""
+def state_root() -> str:
+    """The wrapper's state: ~/.cache/claude-secure-sandbox, or
+    CLAUDE_SECURE_SANDBOX_HOME (tests). There is no configuration file: what
+    the sandbox may reach is decided by the tool and by each repository's
+    .claudesandbox."""
+    root = os.environ.get("CLAUDE_SECURE_SANDBOX_HOME") or ""
     root = expand_home(root) if root else os.path.join(os.environ["HOME"], ".cache", NAME)
     try:
         os.makedirs(root, exist_ok=True)
@@ -225,15 +188,8 @@ def is_executable_file(path: str) -> bool:
     return os.path.isfile(path) and os.access(path, os.X_OK)
 
 
-def find_real_claude(config: Config, root: str) -> Optional[str]:
-    """claude_bin from the configuration, otherwise the first "claude" on the
-    PATH that is not this wrapper."""
-    configured = config.string("claude_bin")
-    if configured:
-        configured = expand_home(configured)
-        if not os.access(configured, os.X_OK):
-            die(f"claude_bin is not executable: {configured}")
-        return configured
+def find_real_claude(root: str) -> Optional[str]:
+    """The first "claude" on the PATH that is not this wrapper."""
     me = realpath(os.path.join(root, "bin", "claude"))
     for d in os.environ.get("PATH", "").split(":"):
         candidate = os.path.join(d or ".", "claude")
@@ -242,10 +198,8 @@ def find_real_claude(config: Config, root: str) -> Optional[str]:
     return None
 
 
-def find_srt(config: Config, root: str) -> Optional[str]:
-    configured = config.string("srt_bin")
-    if configured:
-        return expand_home(configured)
+def find_srt(root: str) -> Optional[str]:
+    """The srt installed with the tool (npm ci), never another one."""
     local = os.path.join(root, "node_modules", ".bin", "srt")
     return local if os.access(local, os.X_OK) else None
 

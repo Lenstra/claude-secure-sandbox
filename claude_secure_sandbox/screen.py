@@ -6,7 +6,7 @@ import os
 import shutil
 import sys
 
-from .common import NAME, PROTECT_FILE, path_within
+from .common import NAME, SANDBOX_FILE, path_within
 from .context import Context
 
 
@@ -41,7 +41,7 @@ def confirm_session(ctx: Context) -> bool:
         branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
         hidden = ", ".join(ctx.protected[:5]) + (f" and {len(ctx.protected) - 5} more"
                                                  if len(ctx.protected) > 5 else "")
-        intro = f"This repository is protected: it has a {PROTECT_FILE} file."
+        intro = f"This repository is protected: its {SANDBOX_FILE} lists protected paths."
         lines = [
             f"Hidden from Claude:  {hidden}",
             f"Claude works on:     a copy of this repository, branch {branch}",
@@ -53,7 +53,7 @@ def confirm_session(ctx: Context) -> bool:
             "Claude can edit:     nothing there; it will tell you the changes to make",
         ]
     else:
-        intro = f"No {PROTECT_FILE} here: Claude works directly in this folder."
+        intro = "Nothing is protected here: Claude works directly in this folder."
         lines = [
             f"Claude can edit:     {display_path(ctx.work)}",
         ]

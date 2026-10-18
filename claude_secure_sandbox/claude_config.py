@@ -16,11 +16,12 @@ from .common import (ensure_real_dir, install_file, install_json, load_json, ove
 from .context import Context
 from .screen import session_label
 
-DEFAULT_SYNC = ["settings.json", "CLAUDE.md", "agents", "commands", "skills", "plugins"]
+# Items of ~/.claude passed through, read only.
+SYNC = ["settings.json", "CLAUDE.md", "agents", "commands", "skills", "plugins"]
 
 
-# Items of ~/.claude that hold transcripts, history or credentials: never
-# passed through to the sandbox, even when listed in "sync".
+# Items of ~/.claude that hold transcripts, history or credentials: hidden
+# from the sandbox.
 PRIVATE_CLAUDE_ITEMS = {"projects", "file-history", "history.jsonl", "todos", "shell-snapshots",
                         "sessions", "statsig", "debug", "ide", ".credentials.json"}
 
@@ -36,11 +37,7 @@ def sync_claude_config(ctx: Context) -> None:
     sensitive = [ctx.state_root, os.path.join(os.environ["HOME"], ".ssh")]
     if not ctx.directory_mode:
         sensitive += [ctx.dev_root, ctx.dev_git_common]
-    for item in ctx.config.paths("sync") or DEFAULT_SYNC:
-        parts = item.split("/")
-        if not item or item.startswith("/") or ".." in parts or "." in parts or parts[0] in PRIVATE_CLAUDE_ITEMS:
-            warn(f"sync item ignored: {item}")
-            continue
+    for item in SYNC:
         target = os.path.join(dst, item)
         # Never write through a link Claude planted in claude-home.
         if not path_within(dst, realpath(os.path.dirname(target))):

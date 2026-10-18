@@ -12,7 +12,7 @@ import platform
 from typing import List
 
 from .common import path_within, read_lines, realpath, volume_roots
-from .protect import PROTECT_FILE, find_protect_files
+from .protect import find_protect_files, protects
 
 # macOS reaches the data volume through firmlinks; fd reports it under this prefix.
 MACOS_DATA = "/System/Volumes/Data"
@@ -42,7 +42,7 @@ def scan_roots() -> List[str]:
 
 
 def scan(state_root: str, roots: List[str]) -> List[str]:
-    """Directories that hold a .claudeprotected, under roots, each scanned
+    """Directories that hold a .claudesandbox (or .claudeprotected), under roots, each scanned
     without leaving its filesystem; the wrapper's state is left out (its
     copies hold one too)."""
     found, seen = set(), set()
@@ -69,4 +69,4 @@ def protected_repositories(state_root: str, roots: List[str]) -> List[str]:
             found.update(read_lines(marker))
         except OSError:
             pass
-    return sorted(r for r in found if os.path.isfile(os.path.join(r, PROTECT_FILE)))
+    return sorted(r for r in found if protects(r))

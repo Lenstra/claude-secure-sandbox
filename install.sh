@@ -94,11 +94,8 @@ Next steps:
 
   3. Log in to Claude Code if you have not yet: claude-unsandboxed, then /login.
 
-Optional: to allow more network domains or readable directories for your
-tools, create the wrapper's configuration from the example:
-
-    mkdir -p ~/.config/$NAME
-    cp $ROOT/share/config.example.json ~/.config/$NAME/config.json
+  4. In each repository, list in .claudesandbox the paths to protect, and
+     the domains and paths Claude may reach beyond the defaults. See the README.
 MSG
 if [ "$moved" = 1 ]; then
   echo

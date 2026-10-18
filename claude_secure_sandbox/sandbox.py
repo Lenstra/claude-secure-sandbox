@@ -11,14 +11,13 @@ import shlex
 import shutil
 import signal
 import subprocess
-from typing import List
+from typing import List, Tuple
 
-from .common import (NAME, PLACEHOLDER_TEXT, PROTECT_FILE, die, ensure_real_dir, log, overlaps, path_within,
+from .common import (NAME, PLACEHOLDER_TEXT, SANDBOX_FILE, die, ensure_real_dir, log, overlaps, path_within,
                      read_text, realpath, stamp, warn, write_text)
 from .context import Context
 from .filtered_copy import claude_project_dir
 from .claude_config import PRIVATE_CLAUDE_ITEMS, claude_settings
-from .protect import is_protected_path, normalize
 from .screen import confirm_session, protected_code_exists
 
 DEFAULT_DOMAINS = [
@@ -31,6 +30,8 @@ GIT_HOSTS = [
     "github.com", "*.github.com", "*.githubusercontent.com", "gitlab.com", "*.gitlab.com",
     "bitbucket.org", "*.bitbucket.org", "dev.azure.com", "*.dev.azure.com",
     "*.visualstudio.com", "codeberg.org", "sourceforge.net", "*.sourceforge.net",
+    # GitHub's MCP server, which reads the repositories GitHub hosts.
+    "githubcopilot.com", "*.githubcopilot.com",
 ]
 
 # Where credentials live, relative to the home directory. When protected code
@@ -75,22 +76,48 @@ def denied_domains(ctx: Context) -> List[str]:
     return sorted(hosts)
 
 
-def allowed_domains(ctx: Context, denied: List[str]) -> List[str]:
-    allowed = set()
-    for d in DEFAULT_DOMAINS + ctx.config.paths("network", "allowed_domains"):
-        d = d.lower()
-        if d == "*" or d.startswith("*:"):
-            die('allowed_domains cannot contain "*"')
-        if d in denied:
-            die(f"git host not allowed in allowed_domains: {d}")
+def allowed_domains(ctx: Context) -> List[str]:
+    """The Anthropic domains, and those of the repository's .claudesandbox
+    that the developer confirmed (checked by check_access)."""
+    return sorted(set(DEFAULT_DOMAINS) | set(ctx.granted_domains))
+
+
+def check_access(ctx: Context, paths: List[str], domains: List[str]) -> Tuple[List[str], List[str]]:
+    """Refuses what a .claudesandbox may never open, before the developer is
+    asked: a git host, this computer, and paths that hold credentials,
+    protected code, Claude's transcripts, temp files or the wrapper's state."""
+    denied = denied_domains(ctx)
+    for d in domains:
+        if any(domains_overlap(d, h) for h in denied):
+            die(f"{SANDBOX_FILE}: git host not allowed in [domain]: {d}")
         if local_destination(d):
-            die(f"this computer is not allowed in allowed_domains: {d}")
-        allowed.add(d)
-    return sorted(allowed)
+            die(f"{SANDBOX_FILE}: this computer is not allowed in [domain]: {d}")
+    home = os.environ["HOME"]
+    sensitive = [ctx.state_root, os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
+    sensitive += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + _user_temp_dirs()
+    sensitive += ctx.protected_elsewhere
+    if not ctx.directory_mode:
+        sensitive += [ctx.dev_root, ctx.dev_git_common]
+    for p in paths:
+        for secret in sensitive:
+            if overlaps(p, secret) or overlaps(realpath(p), realpath(secret)):
+                die(f"{SANDBOX_FILE}: [path] {p} not allowed, it overlaps {secret}")
+    return paths, domains
+
+
+def domains_overlap(a: str, b: str) -> bool:
+    """True if two domain entries (name or *.name, with an optional port)
+    can match the same host: *.name matches every name below it."""
+    def split(entry):
+        host = entry.rsplit(":", 1)[0] if entry.count(":") == 1 else entry
+        return (host[2:], True) if host.startswith("*.") else (host, False)
+    (ha, wa), (hb, wb) = split(a), split(b)
+    return (ha == hb or (wa and hb.endswith("." + ha)) or (wb and ha.endswith("." + hb))
+            or (wa and wb and (ha.endswith("." + hb) or hb.endswith("." + ha))))
 
 
 def local_destination(entry: str) -> bool:
-    """An allowed_domains entry that designates this computer: localhost, a
+    """A [domain] entry that designates this computer: localhost, a
     loopback, unspecified or link-local address. A service listening there
     (an MCP server, an adb or Docker daemon, a dev server) runs outside the
     sandbox: reached through srt's proxy, it would read for Claude what the
@@ -107,44 +134,6 @@ def local_destination(entry: str) -> bool:
     except ValueError:
         return False
     return address.is_loopback or address.is_unspecified or address.is_link_local
-
-
-def copy_dependency_dirs(ctx: Context) -> None:
-    """Copies the dependency directories listed in the configuration
-    (node_modules, etc.) from the developer's repository, when they are
-    missing from the copy."""
-    for d in ctx.config.paths("copy_dirs"):
-        try:
-            d = normalize(d) or ""
-        except ValueError:
-            warn(f"copy_dirs: invalid path ignored: {d}")
-            continue
-        if not d:
-            continue
-        if is_protected_path(ctx.protected, d):
-            warn(f"copy_dirs: {d} is protected, ignored")
-            continue
-        if any(p.startswith(d + "/") for p in ctx.protected):
-            warn(f"copy_dirs: {d} contains a protected path, ignored")
-            continue
-        src = os.path.join(ctx.dev_root, d)
-        dst = os.path.join(ctx.work, d)
-        if not os.path.isdir(src) or os.path.lexists(dst):
-            continue
-        # The closest existing parent must be inside the copy (no link planted
-        # by Claude that would make the wrapper write elsewhere).
-        parent = os.path.dirname(dst)
-        while not os.path.lexists(parent):
-            parent = os.path.dirname(parent)
-        if not path_within(ctx.work, realpath(parent)):
-            warn(f"copy_dirs: {d} leads outside the copy, ignored")
-            continue
-        log(f"copying {d} from the developer's repository")
-        try:
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copytree(src, dst, symlinks=True)
-        except (OSError, shutil.Error):
-            warn(f"incomplete copy of {d}")
 
 
 def other_sessions(ctx: Context) -> List[str]:
@@ -228,7 +217,7 @@ def _user_temp_dirs() -> List[str]:
 def write_srt_settings(ctx: Context) -> None:
     home = os.environ["HOME"]
     denied = denied_domains(ctx)
-    allowed = allowed_domains(ctx, denied)
+    allowed = allowed_domains(ctx)
     secrets = [ctx.state_root, f"{home}/.ssh", f"{home}/.claude", f"{home}/.claude.json"]
     if not ctx.directory_mode:
         secrets += [ctx.dev_root, ctx.dev_git_common]
@@ -242,19 +231,6 @@ def write_srt_settings(ctx: Context) -> None:
         for secret in secrets:
             if overlaps(secret, claude_dir):
                 die(f"the claude binary ({claude_dir}) is inside a sensitive area ({secret}): set claude_bin")
-
-    # Extra writable paths from the configuration: not inside a sensitive
-    # area, not above one, and not through a link (srt follows links).
-    if ctx.config.get("filesystem", "allow_read") is not None:
-        warn("configuration: filesystem.allow_read is no longer used, everything outside the denylist is readable")
-    extra_write = ctx.config.paths("filesystem", "allow_write")
-    for p in extra_write:
-        real = realpath(p)
-        if p == "/" or real == "/":
-            die("the configuration opens the root directory /")
-        for secret in secrets:
-            if overlaps(p, secret) or overlaps(real, secret):
-                die(f"the configuration opens {p}, which conflicts with {secret}")
 
     # Everything is readable, except a denylist:
     # - in protected mode, the developer's repository (Claude works in the
@@ -278,13 +254,14 @@ def write_srt_settings(ctx: Context) -> None:
     # it lives in a temp directory, say): on Linux, a read-only bind of a
     # directory would cover the writable mounts inside it.
     needed = [ctx.work, ctx.tmp, ctx.run_dir, ctx.claude_home, claude_dir, os.path.join(ctx.root, "libexec"),
-              os.path.join(os.path.dirname(os.path.dirname(realpath(ctx.srt))), "vendor")] + ctx.config_read
+              os.path.join(os.path.dirname(os.path.dirname(realpath(ctx.srt))), "vendor")]
+    needed += ctx.config_read + ctx.granted_paths
     allow_read = [p for p in needed if any(path_within(d, p) and d != p for d in deny_read)]
-    allow_write = ([] if ctx.read_only_root else [ctx.work]) + [ctx.tmp, ctx.claude_home] + extra_write
+    allow_write = ([] if ctx.read_only_root else [ctx.work]) + [ctx.tmp, ctx.claude_home]
     # Protected repositories under the session's directory: not writable either.
     deny_write_protected = [r for r in ctx.protected_elsewhere if path_within(ctx.work, r)]
     deny_write = [] if ctx.read_only_root else [os.path.join(ctx.copy_git, p) for p in LOCKED_GIT_PATHS]
-    deny_write.append(os.path.join(ctx.work, PROTECT_FILE))
+    deny_write.append(os.path.join(ctx.work, SANDBOX_FILE))
     deny_write += [os.path.join(ctx.work, p) for p in ctx.protected] + deny_write_protected
     if platform.system() == "Linux":
         # bubblewrap denies a path by mounting over it: an absent path would
@@ -370,7 +347,7 @@ def write_system_prompt(ctx: Context) -> None:
               "but not write it: write files in the temporary directory ($TMPDIR), and give the developer "
               "the changes or commands to apply them:" if ctx.read_only_root
               else "You work directly in this directory, and can read and write it:")
-    template = (template.replace("@PLACEHOLDER@", PLACEHOLDER_TEXT).replace("@PROTECT_FILE@", PROTECT_FILE)
+    template = (template.replace("@PLACEHOLDER@", PLACEHOLDER_TEXT).replace("@SANDBOX_FILE@", SANDBOX_FILE)
                 .replace("@ROOT@", ctx.work).replace("@ACCESS@", access))
     paths = "\n".join(f"- `{p}`" for p in ctx.protected)
     lines = [paths if line == "@PROTECTED_PATHS@" else line for line in template.split("\n")]
@@ -393,6 +370,9 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
         "CLAUDE_CODE_SYNC_PLUGINS": "1",
         "CLAUDE_SECURE_SANDBOX_ACTIVE": "1",
     })
+    # Java's temp directory is /tmp by default, unwritable on macOS.
+    env["JAVA_TOOL_OPTIONS"] = " ".join(filter(None, [env.get("JAVA_TOOL_OPTIONS"),
+                                                      f"-Djava.io.tmpdir={ctx.tmp}"]))
     for var in ("SSH_AUTH_SOCK", "GIT_ASKPASS", "SSH_ASKPASS"):
         env.pop(var, None)
     # srt forces TMPDIR=/tmp/claude, shared by every sandbox: keep the

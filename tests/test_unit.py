@@ -7,8 +7,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from claude_secure_sandbox.common import path_within  # noqa: E402
-from claude_secure_sandbox.protect import is_protected_path, normalize, sparse_escape  # noqa: E402
-from claude_secure_sandbox.sandbox import local_destination, url_host  # noqa: E402
+from claude_secure_sandbox.protect import SandboxFile, is_protected_path, normalize, sparse_escape  # noqa: E402
+from claude_secure_sandbox.sandbox import domains_overlap, local_destination, url_host  # noqa: E402
 
 
 class NormalizeTest(unittest.TestCase):
@@ -34,7 +34,7 @@ class NormalizeTest(unittest.TestCase):
             "sub/.git/x": ".git path",
             ".": "outside the repository root",
             "./": "whole repository",
-            ".claudeprotected": "cannot protect itself",
+            ".claudesandbox": "cannot protect itself",
         }
         for line, message in cases.items():
             with self.subTest(line=line):
@@ -64,6 +64,35 @@ class PathTest(unittest.TestCase):
         self.assertEqual(sparse_escape("x "), "x\\ ")
 
 
+class SandboxFileTest(unittest.TestCase):
+    def test_sections(self):
+        f = SandboxFile("# comment\n[protected]\nsecret/\n\n[path]\n~/.m2\n/opt/sdk/\n"
+                        "[domain]\nRegistry.npmjs.org\n*.example.com:8443\n")
+        self.assertEqual(f.errors, [])
+        self.assertEqual(f.protected, {"secret"})
+        self.assertEqual(f.paths, {os.path.expanduser("~/.m2"), "/opt/sdk"})
+        self.assertEqual(f.domains, {"registry.npmjs.org", "*.example.com:8443"})
+
+    def test_errors(self):
+        cases = {
+            "secret\n": "outside a section",
+            "[network]\nx.com\n": "unknown section",
+            "[path]\nrelative/dir\n": "absolute path or ~/",
+            "[path]\n~\n": "too broad",
+            "[path]\n/\n": "too broad",
+            "[path]\n~/a/../b\n": ". and .. not allowed",
+            "[path]\n~/*.jar\n": "pattern not supported",
+            "[domain]\n*\n": "not allowed",
+            "[domain]\nhttps://x.com/\n": "invalid domain",
+            "[protected]\n/etc\n": "absolute path",
+        }
+        for content, message in cases.items():
+            with self.subTest(content=content):
+                errors = SandboxFile(content).errors
+                self.assertEqual(len(errors), 1)
+                self.assertIn(message, errors[0])
+
+
 class UrlHostTest(unittest.TestCase):
     def test_hosts(self):
         self.assertEqual(url_host("https://GitHub.com/org/repo.git"), "github.com")
@@ -75,6 +104,23 @@ class UrlHostTest(unittest.TestCase):
         for url in ("/srv/repo.git", "./repo", "../repo", "file:///srv/repo", "repo"):
             with self.subTest(url=url):
                 self.assertEqual(url_host(url), "")
+
+
+class DomainsOverlapTest(unittest.TestCase):
+    def test_overlap(self):
+        for a, b in (("github.com", "github.com"), ("api.github.com", "*.github.com"),
+                     ("*.github.com", "*.github.com"), ("*.com", "*.github.com"), ("*.com", "github.com"),
+                     ("api.githubcopilot.com:443", "*.githubcopilot.com")):
+            with self.subTest(a=a, b=b):
+                self.assertTrue(domains_overlap(a, b))
+                self.assertTrue(domains_overlap(b, a))
+
+    def test_no_overlap(self):
+        for a, b in (("notgithub.com", "*.github.com"), ("registry.npmjs.org", "github.com"),
+                     ("github.com.evil.io", "github.com")):
+            with self.subTest(a=a, b=b):
+                self.assertFalse(domains_overlap(a, b))
+                self.assertFalse(domains_overlap(b, a))
 
 
 class LocalDestinationTest(unittest.TestCase):

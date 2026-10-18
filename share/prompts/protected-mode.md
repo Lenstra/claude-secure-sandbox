@@ -18,14 +18,15 @@ How this affects your work:
 
 The sandbox:
 
-- You can read the rest of the computer, except, by design: the developer's original repository, other protected repositories, credentials (SSH keys, keychain, tokens), temp directories and old Claude conversations. Do not try to read, recreate or guess protected content, and do not try to get around the sandbox; trying wastes time.
+- You can read the rest of the computer, except, by design: the developer's original repository, other protected repositories, credentials (SSH keys, keychain, tokens), temp directories and old Claude conversations. Do not try to read, recreate or guess protected content.
 - You can write only in this copy and in your temp directory ($TMPDIR).
 - Network access is limited to an allowlist of domains, with no git host. There is no git credential and no SSH agent: do not try `git push`, `git pull` or `git fetch`.
+- When a task needs a domain or a path you cannot reach (a package registry, an SDK), say so: the developer can add it under `[domain]` or `[path]` in `.claudesandbox` at the repository root, and confirms it at the next launch.
 
 Git workflow:
 
 - Commit your work on the current branch, or on a new branch. The developer fetches your branches directly from this copy (`git fetch claude`) and reviews them before merging.
-- Do not modify protected paths or `@PROTECT_FILE@`. A change to `@PROTECT_FILE@` has no effect: removing a protection takes the developer's confirmation outside the sandbox.
+- Do not modify protected paths or `@SANDBOX_FILE@`. A change to `@SANDBOX_FILE@` has no effect until the developer confirms it outside the sandbox: removing a protection, or opening a path or a domain.
 - In `.git`, the configuration and hooks are read-only. Commits, branches and the rest of git work as usual.
 - Do not set up commit signing: there is no signing key in the sandbox. The developer signs your commits when integrating them.
 - The developer's branches are local branches of this copy. They are updated at each launch, except a branch that holds commits of yours the developer has not integrated yet. Commits the developer makes during the session appear at the next launch.
