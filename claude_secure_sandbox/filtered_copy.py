@@ -52,7 +52,10 @@ def write_spec(ctx: Context) -> str:
     if not os.path.isdir(spec_git):
         if subprocess.run(["git", "init", "-q", "--bare", "--template=", spec_git]).returncode:
             die(f"init {spec_git}")
-    spec = "".join(f"/{sparse_escape(p)}\n" for p in [SANDBOX_FILE] + ctx.visible)
+    if "." in ctx.visible:
+        spec = "/*\n"
+    else:
+        spec = "".join(f"/{sparse_escape(p)}\n" for p in [SANDBOX_FILE] + ctx.visible)
     proc = subprocess.run(["git", "hash-object", "-w", "--stdin"], input=spec, env=env,
                           stdout=subprocess.PIPE, encoding="utf-8")
     if proc.returncode:
@@ -124,9 +127,11 @@ def fetch_from_dev(ctx: Context) -> List[str]:
 
 
 def _log_hidden_paths(ctx: Context, revs: List[str]) -> str:
-    """git log --raw restricted to hidden paths: everything except [visible].
+    """git log --raw restricted to hidden paths: everything except [allowed-git].
     --full-history walks every side branch, including merges that discarded
     it."""
+    if "." in ctx.visible:
+        return ""
     specs = [":/"] + [f":(top,exclude,literal){p}" for p in [SANDBOX_FILE] + ctx.visible]
     return ctx.git_dev.out(
         "-c", "diff.renames=false", "-c", "log.showSignature=false", "-c", "core.quotePath=false",
@@ -268,7 +273,7 @@ def prepare_copy(ctx: Context) -> None:
         rebuild = "integrity"
     ctx.spec = write_spec(ctx)
     messages = {
-        "visible-changed": (log, f"the [visible] paths of {SANDBOX_FILE} changed: rebuilding the copy and archiving sessions"),
+        "visible-changed": (log, f"the [allowed-git] paths of {SANDBOX_FILE} changed: rebuilding the copy and archiving sessions"),
         "integrity": (warn, "the copy's .git was tampered with: rebuilding"),
         "verify": (warn, "hidden content found in the copy: rebuilding"),
         "init": (log, "creating the filtered copy (first run, may take a while)"),
@@ -355,7 +360,7 @@ def write_sparse_patterns(ctx: Context, commit: str) -> List[str]:
     whose content is hidden at the given commit. What Claude cannot read is
     already absent from the copy: these patterns keep git from looking for
     it, and let Claude add files at new paths (a Makefile at the root), which
-    the developer can then list in [visible]. Returns the visible files whose
+    the developer can then list in [allowed-git]. Returns the visible files whose
     content is hidden."""
     hidden = set(read_lines(ctx.state_file("hidden-blobs")))
     roots, _ = hidden_roots(ctx.visible, read_lines(ctx.state_file("hidden-paths")))

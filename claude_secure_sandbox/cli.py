@@ -1,10 +1,10 @@
 """Entry point of the `claude` wrapper.
 
 Every session runs Claude Code inside a sandbox (srt), where every protected
-repository of the computer is hidden. In a repository whose .claudesandbox
-has a [visible] section (protected mode), Claude works on a filtered copy of
-it, with only the paths listed there. Anywhere else (directory mode), Claude
-works in the directory itself.
+repository of the computer is hidden. In a repository with a .claudesandbox
+(protected mode), Claude works on a filtered copy of it, with only the paths
+the file lists. Anywhere else (directory mode), Claude works in the
+directory itself.
 """
 
 from __future__ import annotations
@@ -104,8 +104,8 @@ def find_protected_elsewhere(ctx: Context, protected_mode: bool) -> None:
 
 
 def run_protected_mode(ctx: Context, cwd: str, args: List[str], was_protected: bool) -> int:
-    """A [visible] section: Claude works in a filtered copy of the repository,
-    with only the confirmed [visible] paths."""
+    """A .claudesandbox: Claude works in a filtered copy of the repository,
+    with only the confirmed [allowed-git] paths."""
     git_dir = realpath(ctx.git_dev.out("rev-parse", "--absolute-git-dir"))
     common_dir = realpath(ctx.git_dev.out("rev-parse", "--path-format=absolute", "--git-common-dir"))
     if git_dir != common_dir:
@@ -124,7 +124,7 @@ def run_protected_mode(ctx: Context, cwd: str, args: List[str], was_protected: b
     rel = os.path.relpath(cwd, ctx.dev_root)
     rel = "" if rel == "." else rel
     if not (is_visible(ctx.visible, rel) or leads_to_visible(ctx.visible, rel)):
-        die(f"{rel} is hidden from Claude (not under [visible] in {SANDBOX_FILE}): "
+        die(f"{rel} is hidden from Claude (not under [allowed-git] in {SANDBOX_FILE}): "
             "run claude from a directory Claude can see")
     resume = any(a in RESUME or a.startswith("--resume=") for a in args)
 
@@ -165,15 +165,16 @@ def main(root: str, args: List[str]) -> int:
     toplevel = _git_toplevel(cwd)
     ctx.dev_root = realpath(toplevel) if toplevel else cwd
     if os.path.isfile(os.path.join(ctx.dev_root, LEGACY_PROTECT_FILE)):
-        die(f"{LEGACY_PROTECT_FILE} is replaced by {SANDBOX_FILE}: list under a [visible] line "
+        die(f"{LEGACY_PROTECT_FILE} is replaced by {SANDBOX_FILE}: list under an [allowed-git] line "
             "what Claude may see, everything else is hidden")
     ctx.sandbox_file = read_sandbox_file(ctx.dev_root)
-    if not toplevel and ctx.sandbox_file.has_visible:
-        die(f"{SANDBOX_FILE} has a [visible] section, but this directory is not a git repository")
+    if not toplevel and ctx.sandbox_file.exists:
+        die(f"{SANDBOX_FILE} protects a git repository, and this directory is not one: "
+            "run git init, or remove the file")
     # A repository that was ever protected stays in protected mode until the
     # developer confirms otherwise (confirm_visible).
     was_protected = bool(toplevel) and ever_protected(ctx.git_dev)
-    protected_mode = ctx.sandbox_file.has_visible or was_protected
+    protected_mode = ctx.sandbox_file.exists or was_protected
 
     check_deps()
     ctx.srt = find_srt(root) or die(f'srt not found: run "npm ci" in {root}')

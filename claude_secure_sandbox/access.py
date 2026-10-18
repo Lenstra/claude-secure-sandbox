@@ -56,7 +56,7 @@ def denied_domains(ctx: Context) -> List[str]:
 
 
 def allowed_domains(ctx: Context) -> List[str]:
-    """The Anthropic domains, and the confirmed [domain] entries."""
+    """The Anthropic domains, and the confirmed [allowed-domain] entries."""
     return sorted(set(DEFAULT_DOMAINS) | set(ctx.granted_domains))
 
 
@@ -72,7 +72,7 @@ def domains_overlap(a: str, b: str) -> bool:
 
 
 def local_destination(entry: str) -> bool:
-    """True for a [domain] entry that designates this computer: localhost, a
+    """True for an [allowed-domain] entry that designates this computer: localhost, a
     loopback, unspecified or link-local address. A service listening there
     (an MCP server, an adb or Docker daemon, a dev server) runs outside the
     sandbox: reached through srt's proxy, it would read for Claude what the
@@ -168,10 +168,10 @@ def check_access(ctx: Context, paths: List[str], domains: List[str]) -> None:
     denied = denied_domains(ctx)
     for d in domains:
         if any(domains_overlap(d, h) for h in denied):
-            die(f"{SANDBOX_FILE}: git host not allowed in [domain]: {d}")
+            die(f"{SANDBOX_FILE}: git host not allowed in [allowed-domain]: {d}")
         if local_destination(d):
-            die(f"{SANDBOX_FILE}: this computer is not allowed in [domain]: {d}")
+            die(f"{SANDBOX_FILE}: this computer is not allowed in [allowed-domain]: {d}")
     for p in paths:
         secret = overlapped_secret(ctx, p)
         if secret:
-            die(f"{SANDBOX_FILE}: [path] {p} not allowed, it overlaps {secret}")
+            die(f"{SANDBOX_FILE}: [allowed-external] {p} not allowed, it overlaps {secret}")

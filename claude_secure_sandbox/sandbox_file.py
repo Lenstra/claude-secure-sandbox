@@ -1,11 +1,13 @@
 """The .claudesandbox file at a repository's root: reading and validation,
 what Claude may see in the repository, and the developer's confirmations.
 
-Every section is an allowlist: [visible] (repository paths Claude may see;
-the section, even empty, makes the repository protected), [path] (paths
-Claude may read beyond the defaults) and [domain] (network domains). Claude
-can change the file, so what it opens only widens with the developer's
-confirmation in the terminal, before Claude starts.
+The file's presence protects the repository: Claude sees nothing in it but
+what the file lists. Every section is an allowlist: [allowed-git]
+(repository paths Claude sees, files and history, "." for all of them),
+[allowed-external] (paths outside the repository Claude may read) and
+[allowed-domain] (network domains). Claude can change the file, so what it
+opens only widens with the developer's confirmation in the terminal, before
+Claude starts.
 """
 
 from __future__ import annotations
@@ -19,10 +21,13 @@ from typing import List, Set, Tuple
 from .common import (LEGACY_PROTECT_FILE, NAME, SANDBOX_FILE, Git, ask, die, expand_home, log, path_within,
                      read_lines, read_text, sha1, warn, write_lines)
 
-SECTIONS = ("visible", "path", "domain")
+SECTIONS = ("allowed-git", "allowed-external", "allowed-domain")
+# Section names of earlier versions, and what replaced them.
+RENAMED = {"visible": "allowed-git", "path": "allowed-external", "domain": "allowed-domain",
+           "protected": "allowed-git (list what Claude may see; everything else is hidden)"}
 _PATTERN_CHARS = set("*?[\\")
 _DOMAIN = re.compile(r"^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$")
-# Stored among the [visible] confirmations when the developer stops
+# Stored among the [allowed-git] confirmations when the developer stops
 # protecting a repository: never a valid path (patterns are refused).
 UNPROTECTED = "*unprotected*"
 
@@ -35,7 +40,8 @@ class SandboxFile:
     and invalid entries are listed in errors."""
 
     def __init__(self, content: str = ""):
-        self.has_visible = False
+        # True when the file exists: the repository is then protected.
+        self.exists = False
         self.visible: Set[str] = set()
         self.paths: Set[str] = set()
         self.domains: Set[str] = set()
@@ -47,23 +53,21 @@ class SandboxFile:
                 continue
             if line.startswith("[") and line.endswith("]"):
                 section = line[1:-1].strip().lower()
-                self.has_visible = self.has_visible or section == "visible"
-                if section == "protected":
-                    self.errors.append(f"line {number}: [protected] is replaced by [visible]: "
-                                       "list what Claude may see, everything else is hidden")
+                if section in RENAMED:
+                    self.errors.append(f"line {number}: [{section}] is replaced by [{RENAMED[section]}]")
                 elif section not in SECTIONS:
                     self.errors.append(f"line {number}: unknown section {line} "
-                                       "(sections: [visible], [path], [domain])")
+                                       "(sections: [allowed-git], [allowed-external], [allowed-domain])")
                 continue
             if section is None:
                 self.errors.append(f"line {number}: outside a section: {line}")
                 continue
             try:
-                if section == "visible":
+                if section == "allowed-git":
                     self.visible.add(normalize_visible(line))
-                elif section == "path":
+                elif section == "allowed-external":
                     self.paths.add(normalize_read_path(line))
-                elif section == "domain":
+                elif section == "allowed-domain":
                     self.domains.add(normalize_domain(line))
             except ValueError as e:
                 self.errors.append(f"line {number}: {e}")
@@ -81,14 +85,15 @@ def read_sandbox_file(directory: str) -> SandboxFile:
         return SandboxFile()
     except (OSError, UnicodeDecodeError):
         die(f"cannot read {path}")
+    content.exists = True
     if content.errors:
         die(f"invalid {SANDBOX_FILE}:" + "".join(f"\n  {e}" for e in content.errors))
     return content
 
 
 def normalize_visible(line: str) -> str:
-    """A [visible] entry: a literal path relative to the repository root.
-    Raises ValueError."""
+    """An [allowed-git] entry: a literal path relative to the repository root,
+    or "." for the whole repository. Raises ValueError."""
     if line.startswith("/"):
         raise ValueError(f"absolute path not allowed: {line}")
     if any(c in _PATTERN_CHARS for c in line) or line.startswith("!"):
@@ -101,20 +106,20 @@ def normalize_visible(line: str) -> str:
         path = path.replace("/./", "/")
     if path.endswith("/."):
         path = path[:-2]
+    if path in ("", "."):
+        return "."
     wrapped = f"/{path}/"
     if "/../" in wrapped or "/./" in wrapped:
         raise ValueError(f"path outside the repository root not allowed: {line}")
     if "/.git/" in wrapped:
         raise ValueError(f".git path not allowed: {line}")
-    if path in ("", "."):
-        raise ValueError(f"the whole repository: remove the [visible] section instead: {line}")
     if path == SANDBOX_FILE:
         raise ValueError(f"{SANDBOX_FILE} is always visible: {line}")
     return path
 
 
 def normalize_read_path(line: str) -> str:
-    """A [path] entry: absolute or under ~, literal, never / or the home
+    """An [allowed-external] entry: absolute or under ~, literal, never / or the home
     directory itself. Raises ValueError."""
     path = expand_home(line)
     if not path.startswith("/"):
@@ -130,7 +135,7 @@ def normalize_read_path(line: str) -> str:
 
 
 def normalize_domain(line: str) -> str:
-    """A [domain] entry: a name, *.name or an address, with an optional
+    """An [allowed-domain] entry: a name, *.name or an address, with an optional
     port. Raises ValueError."""
     domain = line.lower()
     if domain == "*" or domain.startswith("*:"):
@@ -144,13 +149,13 @@ def normalize_domain(line: str) -> str:
 
 
 def is_visible(visible: List[str], rel: str) -> bool:
-    """True if rel (relative to the root) is a [visible] path or lies under one."""
-    return rel == SANDBOX_FILE or any(path_within(v, rel) for v in visible)
+    """True if rel (relative to the root) is an [allowed-git] path or lies under one."""
+    return rel == SANDBOX_FILE or any(v == "." or path_within(v, rel) for v in visible)
 
 
 def leads_to_visible(visible: List[str], rel: str) -> bool:
-    """True if a [visible] path lies under the directory rel."""
-    return rel == "" or any(path_within(rel, v) for v in visible)
+    """True if an [allowed-git] path lies under the directory rel."""
+    return rel == "" or any(v == "." or path_within(rel, v) for v in visible)
 
 
 def hidden_roots(visible: List[str], files: List[str]) -> Tuple[List[str], List[str]]:
@@ -230,27 +235,15 @@ def find_sandbox_files(root: str, one_file_system: bool = False, timeout: float 
 
 
 def protects(directory: str) -> bool:
-    """True if the repository at directory holds protected code: a
-    .claudesandbox with a [visible] section, one that cannot be read or is
-    invalid (when in doubt, it is protected), or an earlier .claudeprotected."""
-    if os.path.isfile(os.path.join(directory, LEGACY_PROTECT_FILE)):
-        return True
-    path = os.path.join(directory, SANDBOX_FILE)
-    if not os.path.isfile(path):
-        return False
-    try:
-        content = SandboxFile(read_text(path))
-    except (OSError, UnicodeDecodeError):
-        return True
-    return content.has_visible or bool(content.errors)
+    """True if the directory is protected: it holds a .claudesandbox, or an
+    earlier .claudeprotected."""
+    return any(os.path.isfile(os.path.join(directory, f)) for f in (SANDBOX_FILE, LEGACY_PROTECT_FILE))
 
 
 def ever_protected(git_dev: Git) -> bool:
-    """True if a version of the file in HEAD's history has a [visible] section."""
-    revs = git_dev.value("-c", "log.showSignature=false", "log", "--format=%H", "--full-history",
-                         "HEAD", "--", SANDBOX_FILE).split()
-    return any(SandboxFile(git_dev.value("cat-file", "blob", f"{rev}:{SANDBOX_FILE}")).has_visible
-               for rev in revs)
+    """True if the file was ever committed in HEAD's history."""
+    return bool(git_dev.value("-c", "log.showSignature=false", "log", "-1", "--format=%H", "--full-history",
+                              "HEAD", "--", SANDBOX_FILE))
 
 
 # --- confirmations -------------------------------------------------------------
@@ -277,7 +270,7 @@ def _store(path: str, before: List[str], after: List[str]) -> None:
 
 
 def confirm_visible(git_common: str, current: SandboxFile, was_protected: bool) -> Tuple[bool, List[str]]:
-    """Each [visible] entry is shown to Claude once the developer has
+    """Each [allowed-git] entry is shown to Claude once the developer has
     confirmed it, unless it lies under a confirmed one (narrowing never asks);
     a confirmation ends when its entry leaves the file. A repository that was
     protected stays protected until the developer confirms it no longer is.
@@ -285,17 +278,18 @@ def confirm_visible(git_common: str, current: SandboxFile, was_protected: bool) 
     Returns (protected, the paths Claude may see)."""
     store = os.path.join(git_common, NAME, "visible")
     stored = read_lines(store)
-    if not current.has_visible:
+    if not current.exists:
         if not was_protected or UNPROTECTED in stored:
             return False, []
-        if _ask(f"this repository was protected, and its {SANDBOX_FILE} has no [visible] section any more: "
-                "Claude would read all of it", [], "stop protecting it? [y/N] ", "protection removed",
-                f"it stays protected; restore the [visible] section of {SANDBOX_FILE} to stop this question",
+        if _ask(f"this repository was protected, and its {SANDBOX_FILE} is gone: Claude would read all of it",
+                [], "stop protecting it? [y/N] ", "protection removed",
+                f"it stays protected; restore {SANDBOX_FILE} to stop this question",
                 "no terminal to confirm: it stays protected"):
             _store(store, stored, [UNPROTECTED])
             return False, []
         return True, [e for e in stored if e != UNPROTECTED]
-    confirmed = sorted(e for e in current.visible if any(path_within(c, e) for c in stored if c != UNPROTECTED))
+    confirmed = sorted(e for e in current.visible
+                       if any(c == "." or path_within(c, e) for c in stored if c != UNPROTECTED))
     new = sorted(current.visible - set(confirmed))
     if new and _ask(f"{SANDBOX_FILE} shows Claude paths it could not see before:", new,
                     "show them to Claude? [y/N] ", "paths shown",
@@ -307,7 +301,7 @@ def confirm_visible(git_common: str, current: SandboxFile, was_protected: bool) 
 
 
 def confirm_access(state: str, paths: List[str], domains: List[str]) -> Tuple[List[str], List[str]]:
-    """Each [path] and [domain] entry is granted once the developer has
+    """Each [allowed-external] and [allowed-domain] entry is granted once the developer has
     confirmed it; a confirmation ends when its entry leaves the file.
     Confirmations live in the wrapper's state, out of the sandbox's reach.
     Returns the granted (paths, domains)."""

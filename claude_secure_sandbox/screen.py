@@ -41,7 +41,7 @@ def confirm_session(ctx: Context) -> bool:
         branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
         hidden = ", ".join(ctx.hidden[:5]) + (f" and {len(ctx.hidden) - 5} more"
                                               if len(ctx.hidden) > 5 else "")
-        intro = f"This repository is protected: Claude only sees the [visible] paths of its {SANDBOX_FILE}."
+        intro = f"This repository is protected: Claude only sees what its {SANDBOX_FILE} lists."
         lines = [
             f"Hidden from Claude:  {hidden}",
             f"Claude works on:     a copy of this repository, branch {branch}",

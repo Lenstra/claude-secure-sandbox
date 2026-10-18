@@ -19,7 +19,7 @@ class Context:
         self.srt = ""
         self.dev_root = ""
         self.dev_git_common = ""
-        # Protected mode: the confirmed [visible] paths, the only ones Claude
+        # Protected mode: the confirmed [allowed-git] paths, the only ones Claude
         # sees, and the topmost hidden paths of HEAD, for display.
         self.visible: List[str] = []
         self.hidden: List[str] = []

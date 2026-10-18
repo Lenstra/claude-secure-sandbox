@@ -28,8 +28,6 @@ class NormalizeVisibleTest(unittest.TestCase):
             "a/../b": "outside the repository root",
             ".git/config": ".git path",
             "sub/.git/x": ".git path",
-            ".": "outside the repository root",
-            "./": "the whole repository",
             ".claudesandbox": "always visible",
         }
         for line, message in cases.items():
@@ -55,10 +53,9 @@ class PathTest(unittest.TestCase):
 
 class SandboxFileTest(unittest.TestCase):
     def test_sections(self):
-        f = SandboxFile("# comment\n[visible]\nsrc/\n\n[path]\n~/.m2\n/opt/sdk/\n"
-                        "[domain]\nRegistry.npmjs.org\n*.example.com:8443\n")
+        f = SandboxFile("# comment\n[allowed-git]\nsrc/\n\n[allowed-external]\n~/.m2\n/opt/sdk/\n"
+                        "[allowed-domain]\nRegistry.npmjs.org\n*.example.com:8443\n")
         self.assertEqual(f.errors, [])
-        self.assertTrue(f.has_visible)
         self.assertEqual(f.visible, {"src"})
         self.assertEqual(f.paths, {os.path.expanduser("~/.m2"), "/opt/sdk"})
         self.assertEqual(f.domains, {"registry.npmjs.org", "*.example.com:8443"})
@@ -67,15 +64,16 @@ class SandboxFileTest(unittest.TestCase):
         cases = {
             "secret\n": "outside a section",
             "[network]\nx.com\n": "unknown section",
-            "[path]\nrelative/dir\n": "absolute path or ~/",
-            "[path]\n~\n": "too broad",
-            "[path]\n/\n": "too broad",
-            "[path]\n~/a/../b\n": ". and .. not allowed",
-            "[path]\n~/*.jar\n": "pattern not supported",
-            "[domain]\n*\n": "not allowed",
-            "[domain]\nhttps://x.com/\n": "invalid domain",
-            "[visible]\n/etc\n": "absolute path",
-            "[protected]\nsecret\n": "replaced by [visible]",
+            "[allowed-external]\nrelative/dir\n": "absolute path or ~/",
+            "[allowed-external]\n~\n": "too broad",
+            "[allowed-external]\n/\n": "too broad",
+            "[allowed-external]\n~/a/../b\n": ". and .. not allowed",
+            "[allowed-external]\n~/*.jar\n": "pattern not supported",
+            "[allowed-domain]\n*\n": "not allowed",
+            "[allowed-domain]\nhttps://x.com/\n": "invalid domain",
+            "[allowed-git]\n/etc\n": "absolute path",
+            "[protected]\nsecret\n": "replaced by [allowed-git",
+            "[visible]\nsrc\n": "[visible] is replaced by [allowed-git]",
         }
         for content, message in cases.items():
             with self.subTest(content=content):
@@ -85,11 +83,12 @@ class SandboxFileTest(unittest.TestCase):
 
 
 class VisibleTest(unittest.TestCase):
-    def test_empty_section_hides_everything(self):
-        f = SandboxFile("[visible]\n")
-        self.assertTrue(f.has_visible)
-        self.assertEqual(f.visible, set())
-        self.assertFalse(SandboxFile("[domain]\nx.org\n").has_visible)
+    def test_whole_repository(self):
+        self.assertEqual(normalize_visible("."), ".")
+        self.assertEqual(normalize_visible("./"), ".")
+        self.assertTrue(is_visible(["."], "core/x.c"))
+        self.assertTrue(leads_to_visible(["."], "core"))
+        self.assertEqual(hidden_roots(["."], ["core/x.c", "top.txt"]), ([], []))
 
     def test_visible(self):
         visible = ["src", "lib/public"]

@@ -29,6 +29,9 @@ ok()   { PASS=$((PASS + 1)); printf '  ok    %s\n' "$1"; }
 fail() { FAILED=$((FAILED + 1)); FAIL_NAMES="$FAIL_NAMES
   - $1"; printf '  FAIL  %s\n' "$1"; }
 check() { local name=$1; shift; if "$@" >/dev/null 2>&1; then ok "$name"; else fail "$name"; fi; }
+# The output in $1 contains the pattern $2 (output passed as an argument: it
+# may hold quotes).
+has() { printf '%s' "$1" | grep -q -- "$2"; }
 check_not() { local name=$1; shift; if "$@" >/dev/null 2>&1; then fail "$name"; else ok "$name"; fi; }
 section() { printf '\n== %s\n' "$1"; }
 # Collects the IN-OK / IN-FAIL lines printed by a scenario run inside the sandbox.
@@ -118,7 +121,7 @@ git init -q "$D"
   echo "DUP-SECRET" > src/dup.txt
   : > secret/empty.txt
   : > src/empty.txt
-  printf '[visible]\n# everything else is hidden: secret/, lib/deep/core\nsrc/\nlib/deep/public\n' > "$PF"
+  printf '[allowed-git]\n# everything else is hidden: secret/, lib/deep/core\nsrc/\nlib/deep/public\n' > "$PF"
   git add -A && git commit -qm c1
   git mv src/later.txt secret/later.txt
   echo "SECRET-TWO" > secret/s.txt
@@ -371,7 +374,7 @@ check "choice 2: quit to integrate first" grep -q "integrate Claude's commits (g
 check_not "choice 2: claude not started" grep -q '^SANDBOXED' "$T/out/last"
 run_claude_answer 1 "$T/fakebin/s-dev.sh"
 check "choice 1: backup announced" grep -q "Claude's main kept: git fetch claude refs/backup/" "$T/out/last"
-check "start screen says why" grep -q "This repository is protected: Claude only sees the \[visible\] paths of its .claudesandbox." "$T/out/last"
+check "start screen says why" grep -q "This repository is protected: Claude only sees what its .claudesandbox lists." "$T/out/last"
 check "start screen lists what is hidden" grep -q "Hidden from Claude:  lib/deep/core, secret" "$T/out/last"
 ( cd "$D" && sleep 3 | CS_TEST_SCENARIO=$T/fakebin/s-dev.sh claude_in_terminal ) > "$T/out/cancel" 2>&1
 check "no Enter: Claude not started" sh -c "grep -q cancelled '$T/out/cancel' && ! grep -q '^SANDBOXED' '$T/out/cancel'"
@@ -430,7 +433,7 @@ run_claude "$T/fakebin/s5.sh"
 check "file is public before protection" grep -q '^IN-OK' "$T/out/last"
 (
   cd "$D" || exit 1
-  printf '[visible]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\n' > "$PF"
+  printf '[allowed-git]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\n' > "$PF"
   git commit -qam "hide src/private"
 )
 cat > "$T/fakebin/s6.sh" <<'EOF'
@@ -442,14 +445,14 @@ else
 fi
 EOF
 run_claude "$T/fakebin/s6.sh"
-check "rebuild announced" grep -q "\[visible\] paths of $PF changed" "$T/out/last"
-check_not "narrowing [visible] asks nothing" grep -q "could not see before" "$T/out/last"
+check "rebuild announced" grep -q "\[allowed-git\] paths of $PF changed" "$T/out/last"
+check_not "narrowing [allowed-git] asks nothing" grep -q "could not see before" "$T/out/last"
 check "newly protected path removed from history" grep -q '^IN-OK' "$T/out/last"
 check "archive created" sh -c "ls '$COPY/archive' | grep -q visible-changed"
 
-section "[visible] widened by one of Claude's commits"
+section "[allowed-git] widened by one of Claude's commits"
 cat > "$T/fakebin/s7.sh" <<EOF
-blob=\$(printf '[visible]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\nsecret\n' | git hash-object -w --stdin)
+blob=\$(printf '[allowed-git]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\nsecret\n' | git hash-object -w --stdin)
 git update-index --cacheinfo 100644,\$blob,$PF
 git commit -qm "refactor" || echo "IN-FAIL commit showing secret"
 EOF
@@ -476,7 +479,7 @@ collect
 check "confirmation stored in the developer's .git" grep -qx secret "$D/.git/claude-secure-sandbox/visible"
 run_claude "$T/fakebin/s-visible.sh"
 check_not "no question once confirmed" grep -q "could not see before" "$T/out/last"
-( cd "$D" && printf '[visible]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\n' > "$PF" && git commit -qam "hide secret again" )
+( cd "$D" && printf '[allowed-git]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\n' > "$PF" && git commit -qam "hide secret again" )
 run_claude "$T/fakebin/s-hidden.sh"
 collect
 check "confirmation dropped when hidden again" sh -c "! grep -qx secret '$D/.git/claude-secure-sandbox/visible'"
@@ -496,7 +499,7 @@ if [ -e Makefile ] || [ -e scripts/build.sh ]; then echo "IN-FAIL merged, not li
 EOF
 run_claude "$T/fakebin/s-newpath-hidden.sh"
 collect
-( cd "$D" && printf '[visible]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\nMakefile\nscripts\n' > "$PF" && git commit -qam "show the build scripts" )
+( cd "$D" && printf '[allowed-git]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\nMakefile\nscripts\n' > "$PF" && git commit -qam "show the build scripts" )
 cat > "$T/fakebin/s-newpath-visible.sh" <<'EOF'
 if grep -q NEW-SCRIPT scripts/build.sh 2>/dev/null && [ -f Makefile ]; then echo "IN-OK listed and confirmed: visible"; else echo "IN-FAIL listed and confirmed: visible"; fi
 EOF
@@ -621,7 +624,7 @@ fi
 section "launch cases"
 mkdir -p "$T/plain/sub/protected"
 git init -q "$T/plain/sub/protected"
-printf '[visible]\nx\n' > "$T/plain/sub/protected/$PF"
+printf '[allowed-git]\nx\n' > "$T/plain/sub/protected/$PF"
 cat > "$T/fakebin/s-below.sh" <<EOF
 if cat "$T/plain/sub/protected/$PF" >/dev/null 2>&1; then echo "IN-FAIL a protected repository below is hidden"; else echo "IN-OK a protected repository below is hidden"; fi
 echo x > "$T/plain/sub/protected/new" 2>/dev/null
@@ -713,40 +716,43 @@ EOF
 check "from /: session started, read only" grep -q -- "^SANDBOXED cwd=/$" "$T/out/last"
 collect
 out=$(cd "$D" && claude --version 2>&1)
-check "--version without sandbox" sh -c "printf '%s' '$out' | grep -q '^UNSANDBOXED --version'"
+check "--version without sandbox" has "$out" '^UNSANDBOXED --version'
 out=$(cd "$D/secret" && claude 2>&1)
-check "refused from a hidden directory" sh -c "printf '%s' '$out' | grep -q 'is hidden from Claude'"
+check "refused from a hidden directory" has "$out" 'is hidden from Claude'
 mkdir -p "$T/plain/badrepo" && git init -q "$T/plain/badrepo"
-printf '[visible]\n/etc/passwd\n' > "$T/plain/badrepo/$PF"
+printf '[allowed-git]\n/etc/passwd\n' > "$T/plain/badrepo/$PF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
-check "absolute path refused in the protection file" sh -c "printf '%s' '$out' | grep -q 'absolute path not allowed'"
-printf '[visible]\n../outside\n' > "$T/plain/badrepo/$PF"
+check "absolute path refused in the protection file" has "$out" 'absolute path not allowed'
+printf '[allowed-git]\n../outside\n' > "$T/plain/badrepo/$PF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
-check ".. refused in the protection file" sh -c "printf '%s' '$out' | grep -q 'outside the repository root'"
+check ".. refused in the protection file" has "$out" 'outside the repository root'
 mkdir -p "$COPY/state/lock"
 sleep 30 & sleeper=$!
 echo $sleeper > "$COPY/state/lock/pid"
 out=$(cd "$D" && claude 2>&1)
-check "one session per repository" sh -c "printf '%s' '$out' | grep -q 'already running'"
+check "one session per repository" has "$out" 'already running'
 kill $sleeper 2>/dev/null; wait $sleeper 2>/dev/null
 rm -rf "$COPY/state/lock"
 printf 'secret\n' > "$T/plain/badrepo/$PF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
-check "a line outside a section is refused" sh -c "printf '%s' '$out' | grep -q 'outside a section'"
-printf '[visible]\nsrc\n[network]\nx.com\n' > "$T/plain/badrepo/$PF"
+check "a line outside a section is refused" has "$out" 'outside a section'
+printf '[allowed-git]\nsrc\n[network]\nx.com\n' > "$T/plain/badrepo/$PF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
-check "an unknown section is refused" sh -c "printf '%s' '$out' | grep -q 'unknown section'"
+check "an unknown section is refused" has "$out" 'unknown section'
 printf '[protected]\nsecret\n' > "$T/plain/badrepo/$PF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
-check "[protected] is refused, with the way to convert it" sh -c "printf '%s' '$out' | grep -q 'replaced by \[visible\]'"
+check "[protected] is refused, with the way to convert it" has "$out" 'replaced by \[allowed-git'
+printf '[visible]\nsrc\n' > "$T/plain/badrepo/$PF"
+out=$(cd "$T/plain/badrepo" && claude 2>&1)
+check "a section of an earlier version is refused, with its new name" has "$out" '\[visible\] is replaced by \[allowed-git\]'
 rm "$T/plain/badrepo/$PF"
 echo "core" > "$T/plain/badrepo/.claudeprotected"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
-check "an earlier .claudeprotected stops the launch" sh -c "printf '%s' '$out' | grep -q 'is replaced by .claudesandbox'"
+check "an earlier .claudeprotected stops the launch" has "$out" 'is replaced by .claudesandbox'
 rm "$T/plain/badrepo/.claudeprotected"
-mkdir -p "$T/plain/nogit-protected" && printf '[visible]\nx\n' > "$T/plain/nogit-protected/$PF"
+mkdir -p "$T/plain/nogit-protected" && printf '[allowed-git]\nx\n' > "$T/plain/nogit-protected/$PF"
 out=$(cd "$T/plain/nogit-protected" && claude 2>&1)
-check "[visible] outside a git repository is refused" sh -c "printf '%s' '$out' | grep -q 'not a git repository'"
+check ".claudesandbox outside a git repository is refused" has "$out" 'protects a git repository'
 rm -rf "$T/plain/nogit-protected"
 
 section ".claudesandbox: access beyond the defaults"
@@ -754,14 +760,14 @@ A=$T/plain/access
 # A path to open, outside the temp directories (which .claudesandbox cannot
 # open, and where the test directory lives on macOS).
 SDK=$ROOT/share/prompts
-mkdir -p "$A" && git init -q "$A"
+mkdir -p "$A" && git init -q "$A" && git -C "$A" commit -q --allow-empty -m init
 ACCESS_SETTINGS=$STATE_ROOT/access-$(python3 -c 'import hashlib, sys; print(hashlib.sha1(sys.argv[1].encode()).hexdigest()[:10])' "$A")/run/srt-settings.json
-for entry in "[domain]\ngithub.com" "[domain]\napi.githubcopilot.com" "[domain]\napi.github.com" "[domain]\n*.com" "[domain]\nlocalhost:5037" "[domain]\n127.0.0.1" "[path]\n~/.ssh" "[path]\n~/.claude" "[path]\n/tmp" "[path]\n$STATE_ROOT" "[path]\n~"; do
+for entry in "[allowed-domain]\ngithub.com" "[allowed-domain]\napi.githubcopilot.com" "[allowed-domain]\napi.github.com" "[allowed-domain]\n*.com" "[allowed-domain]\nlocalhost:5037" "[allowed-domain]\n127.0.0.1" "[allowed-external]\n~/.ssh" "[allowed-external]\n~/.claude" "[allowed-external]\n/tmp" "[allowed-external]\n$STATE_ROOT" "[allowed-external]\n~"; do
   printf "$entry\n" > "$A/$PF"
-  out=$(cd "$A" && claude 2>&1)
-  check "refused: $(printf "$entry" | tr '\n' ' ')" sh -c "printf '%s' '$out' | grep -q 'not allowed\|too broad' && ! printf '%s' '$out' | grep -q '^SANDBOXED'"
+  ( cd "$A" && claude ) < /dev/null > "$T/out/last" 2>&1
+  check "refused: $(printf "$entry" | tr '\n' ' ')" sh -c "grep -q 'not allowed\|too broad' '$T/out/last' && ! grep -q '^SANDBOXED' '$T/out/last'"
 done
-printf "[path]\n$SDK\n\n[domain]\nregistry.npmjs.org\n" > "$A/$PF"
+printf "[allowed-external]\n$SDK\n\n[allowed-domain]\nregistry.npmjs.org\n" > "$A/$PF"
 ( cd "$A" && claude ) < /dev/null > "$T/out/last" 2>&1
 check "without a terminal: access not allowed" grep -q "no terminal to confirm: not allowed for this session" "$T/out/last"
 check_not "without a terminal: domain not opened" grep -q registry.npmjs.org "$ACCESS_SETTINGS"
@@ -778,27 +784,46 @@ collect
 ( cd "$A" && claude ) < /dev/null > "$T/out/last" 2>&1
 check_not "no question once confirmed" grep -q "asks for access" "$T/out/last"
 check "confirmed access kept" grep -q registry.npmjs.org "$ACCESS_SETTINGS"
-printf "[path]\n$SDK\n" > "$A/$PF"
+printf "[allowed-external]\n$SDK\n" > "$A/$PF"
 ( cd "$A" && claude ) < /dev/null > "$T/out/last" 2>&1
 check_not "an entry removed from the file is closed" grep -q registry.npmjs.org "$ACCESS_SETTINGS"
-printf "[path]\n$SDK\n\n[domain]\nregistry.npmjs.org\n" > "$A/$PF"
+printf "[allowed-external]\n$SDK\n\n[allowed-domain]\nregistry.npmjs.org\n" > "$A/$PF"
 ( cd "$A" && claude ) < /dev/null > "$T/out/last" 2>&1
 check "an entry added again is asked again" grep -q "asks for access" "$T/out/last"
 check_not "an entry added again stays closed until confirmed" grep -q registry.npmjs.org "$ACCESS_SETTINGS"
 
-section "every protection removed: still protected until confirmed"
+section "an empty .claudesandbox hides everything, \".\" shows everything"
+W=$T/plain/whole
+git init -q "$W" && (
+  cd "$W" || exit 1
+  mkdir -p src && echo "WHOLE-SRC" > src/a.txt && : > "$PF"
+  git add -A && git commit -qm init
+)
+cat > "$T/fakebin/s-whole-hidden.sh" <<'EOF'
+if [ -e src/a.txt ]; then echo "IN-FAIL an empty file hides everything"; else echo "IN-OK an empty file hides everything"; fi
+EOF
+( cd "$W" && CS_TEST_SCENARIO=$T/fakebin/s-whole-hidden.sh claude ) < /dev/null > "$T/out/last" 2>&1
+collect
+( cd "$W" && printf '[allowed-git]\n.\n' > "$PF" && git commit -qam "show everything" )
+cat > "$T/fakebin/s-whole-visible.sh" <<'EOF'
+if grep -q WHOLE-SRC src/a.txt 2>/dev/null; then echo "IN-OK \".\" shows the whole repository"; else echo "IN-FAIL \".\" shows the whole repository"; fi
+EOF
+( cd "$W" && CS_TEST_SCENARIO=$T/fakebin/s-whole-visible.sh run_in_terminal y ) > "$T/out/last" 2>&1
+collect
+
+section ".claudesandbox removed: still protected until confirmed"
 E=$T/plain/everything-removed
 git init -q "$E" && (
   cd "$E" || exit 1
   mkdir -p core && echo "CORE-SECRET" > core/c.txt && echo pub > p.txt
-  printf '[visible]\np.txt\n' > "$PF" && git add -A && git commit -qm init
-  printf '[domain]\nregistry.npmjs.org\n' > "$PF" && git commit -qam "no protection left"
+  printf '[allowed-git]\np.txt\n' > "$PF" && git add -A && git commit -qm init
+  git rm -q "$PF" && git commit -qm "no protection left"
 )
 cat > "$T/fakebin/s-removed.sh" <<'EOF'
 if [ -e core/c.txt ]; then echo "IN-FAIL a repository that was protected stays in protected mode"; else echo "IN-OK a repository that was protected stays in protected mode"; fi
 EOF
 ( cd "$E" && CS_TEST_SCENARIO=$T/fakebin/s-removed.sh claude ) < /dev/null > "$T/out/last" 2>&1
-check "removal of every protection detected" grep -q "has no \[visible\] section any more" "$T/out/last"
+check "removal of the file detected" grep -q "is gone: Claude would read all of it" "$T/out/last"
 collect
 
 # --- uninstall ----------------------------------------------------------------------

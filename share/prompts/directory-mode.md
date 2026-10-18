@@ -9,7 +9,7 @@ The sandbox:
 - @READ@
 - Outside this directory, you can write only in your temp directory ($TMPDIR).
 - Network access is limited to an allowlist of domains, with no git host. There is no git credential and no SSH agent: do not try `git push`, `git pull` or `git fetch`.
-- When a task needs a domain or a path you cannot reach (a package registry, an SDK), say so: the developer can add it under `[domain]` or `[path]` in `.claudesandbox` at the repository root, and confirms it at the next launch.
+- When a task needs a domain or a path you cannot reach (a package registry, an SDK), say so to the developer.
 
 Git workflow:
 

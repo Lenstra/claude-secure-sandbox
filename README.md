@@ -97,7 +97,7 @@ Every `claude` session runs in the sandbox, and shows it. At each launch, the wr
 ```
 🔒 claude-secure-sandbox
 
-This repository is protected: Claude only sees the [visible] paths of its .claudesandbox.
+This repository is protected: Claude only sees what its .claudesandbox lists.
 
    Hidden from Claude:  core/engine, licensing/keys.go
    Claude works on:     a copy of this repository, branch feature-x
@@ -129,25 +129,25 @@ The real binary stays available as `claude-unsandboxed`, for the rare session th
 
 ### The `.claudesandbox` file
 
-Commit a `.claudesandbox` file at the repository root. It has three sections, all optional:
+To protect a repository, commit a `.claudesandbox` file at its root. Its presence is what protects the repository. It has three sections, all optional:
 
 ```
-[visible]
+[allowed-git]
 # everything else is hidden from Claude
 src/
 tests/
 package.json
 
-[path]
+[allowed-external]
 ~/.m2
 
-[domain]
+[allowed-domain]
 registry.npmjs.org
 ```
 
-- **`[visible]`**: the only paths Claude may see in the repository. Everything else is hidden, including what you add later. Paths are relative to the root; a directory shows everything below it. Literal paths only: no `*`, `?`, `[` or `!`. Without this section, nothing is hidden: Claude works directly in your folder.
-- **`[path]`**: what Claude may read beyond the defaults, such as an SDK or a package cache. Absolute or `~/...`, read only.
-- **`[domain]`**: the network domains Claude may reach beyond Anthropic's, such as a package registry.
+- **`[allowed-git]`**: the only paths Claude may see in the repository. Everything else is hidden, including what you add later. Paths are relative to the root; a directory shows everything below it. Literal paths only: no `*`, `?`, `[` or `!`. `.` shows the whole repository; an empty file hides all of it. Without the file, nothing is hidden: Claude works directly in your folder.
+- **`[allowed-external]`**: what Claude may read outside the repository, such as an SDK or a package cache. Absolute or `~/...`, read only.
+- **`[allowed-domain]`**: the network domains Claude may reach beyond Anthropic's, such as a package registry.
 - Lines starting with `#` are comments. A `#` after an entry is part of it: put comments on their own line.
 
 Every section is an allowlist: what is not listed stays closed. The first time an entry appears, the wrapper asks you before Claude starts:
