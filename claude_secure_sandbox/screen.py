@@ -57,14 +57,20 @@ def confirm_session(ctx: Context) -> bool:
         lines = [
             f"Claude can edit:     {display_path(ctx.work)}",
         ]
-    lines.append("Claude can read:     the rest of your computer, except what follows")
-    if others:
-        lines.append(f"Protected, hidden:   {others_text}")
-    if protected_code_exists(ctx):
-        lines.append("Also hidden:         your credentials (SSH keys, keychain, tokens), temp files,")
-        lines.append("                     and your old Claude conversations")
+    if not ctx.read_only_root:
+        lines.append("Claude can read:     the system and the tools on your PATH, not your other files")
+        if ctx.granted_paths:
+            granted = [display_path(p) for p in ctx.granted_paths]
+            lines.append(f"Also readable:       {', '.join(granted)} ({SANDBOX_FILE})")
     else:
-        lines.append("Hidden:              your old Claude conversations; nothing on this computer is protected")
+        lines.append("Claude can read:     the rest of your computer, except what follows")
+        if others:
+            lines.append(f"Protected, hidden:   {others_text}")
+        if protected_code_exists(ctx):
+            lines.append("Also hidden:         your credentials (SSH keys, keychain, tokens), temp files,")
+            lines.append("                     and your old Claude conversations")
+        else:
+            lines.append("Hidden:              your old Claude conversations; nothing on this computer is protected")
     title = NAME
     prompt = "Press Enter to start Claude, or Ctrl-C to cancel: "
     texts = ["", f"🔒 {title}", "", intro, ""] + [f"   {line}" for line in lines] + ["", prompt]

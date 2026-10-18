@@ -10,6 +10,7 @@ works in the directory itself.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -51,11 +52,15 @@ def launch(ctx: Context, cwd: str, args: List[str]) -> int:
     claude_config.sync_claude_credentials(ctx)
     sandbox.write_gitconfig(ctx)
     sandbox.write_tool_links(ctx)
-    sandbox.write_srt_settings(ctx)
-    sandbox.write_system_prompt(ctx)
-    git_files = sandbox.git_files_present(ctx)
-    status = sandbox.run_sandboxed(ctx, cwd, args)
-    sandbox.neutralize_git_files(ctx, git_files)
+    sandbox.make_srt_tmp(ctx)
+    try:
+        sandbox.write_srt_settings(ctx)
+        sandbox.write_system_prompt(ctx)
+        git_files = sandbox.git_files_present(ctx)
+        status = sandbox.run_sandboxed(ctx, cwd, args)
+        sandbox.neutralize_git_files(ctx, git_files)
+    finally:
+        shutil.rmtree(ctx.srt_tmp, ignore_errors=True)
     return status
 
 

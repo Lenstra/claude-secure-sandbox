@@ -4,7 +4,7 @@ Use Claude Code on repositories that contain code it must never read. You list i
 
 - **Enforced by the OS, not by the model.** Every `claude` session runs in an OS sandbox ([`srt`](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime): Seatbelt on macOS, bubblewrap on Linux). Protected content is not on Claude's disk at all, so no tool, script or `git show` can reach it, even if a prompt injection tells Claude to try.
 - **Git keeps working.** Claude works in a filtered copy of your repository with the same commits and SHAs. It reads history, commits on your branch, and you fetch its work with `git fetch claude`.
-- **Other protected code stays hidden too.** Claude can read the rest of your computer, except every other protected repository on it, wherever it is, and your old Claude conversations. When protected code exists on the computer, your credentials (SSH keys, keychain, tokens) and temp files are hidden as well. Claude writes only in its working directory and its temp directory.
+- **Your other files stay hidden too.** Claude reads the system and the tools on your `PATH`, but nothing else in your home folder, on other disks or in temp files, unless a repository asks for it and you confirm. Other protected repositories, your credentials and your old Claude conversations are always hidden. Claude writes only in its working directory and its temp directory.
 - **Native, no Docker.** No VM and no image: sessions start instantly, with Claude Code as installed on the machine.
 
 How it works and why it is built this way: [architecture document](docs/ARCHITECTURE.md).
@@ -46,7 +46,7 @@ Then, as `install.sh` tells you with your own paths:
    command -v claude-unsandboxed   # .../claude-secure-sandbox/bin/claude-unsandboxed
    ```
 
-3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies Claude Code's keychain entry, and only it, into the sandbox; the rest of your keychain stays hidden whenever protected code exists on your computer.
+3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies Claude Code's keychain entry, and only it, into the sandbox; the rest of your keychain stays hidden.
 
 > [!IMPORTANT]
 > If `command -v claude` does not point to the wrapper, `claude` runs Claude Code without any sandbox. Check it again after updating Claude Code or changing your `PATH`.
@@ -102,15 +102,12 @@ This repository is protected: Claude only sees the [visible] paths of its .claud
    Hidden from Claude:  core/engine, licensing/keys.go
    Claude works on:     a copy of this repository, branch feature-x
    Your files:          untouched; get Claude's commits with: git fetch claude
-   Claude can read:     the rest of your computer, except what follows
-   Protected, hidden:   ~/work/billing
-   Also hidden:         your credentials (SSH keys, keychain, tokens), temp files,
-                        and your old Claude conversations
+   Claude can read:     the system and the tools on your PATH, not your other files
 
 Press Enter to start Claude, or Ctrl-C to cancel:
 ```
 
-Where nothing is protected, the screen starts with `Nothing is protected here: Claude works directly in this folder.` and Claude edits that folder directly. Protected repositories elsewhere on the computer stay hidden, including one inside that folder.
+Where nothing is protected, the screen starts with `Nothing is protected here: Claude works directly in this folder.` and Claude edits that folder directly. Your other files stay hidden as well, and protected repositories too, including one inside that folder.
 
 While Claude runs, the bottom line of Claude Code shows `🔒 sandboxed · protected repository my-repo · feature-x` (unless you already set your own status line).
 
@@ -239,7 +236,7 @@ Everything else is in the [architecture document](docs/ARCHITECTURE.md):
 - [what Claude sees](docs/ARCHITECTURE.md#what-claude-sees) in its copy, and why some public files are absent;
 - [what happens to the branches](docs/ARCHITECTURE.md#branches-at-a-new-session) when you run `claude` again, and the question asked when your branch and Claude's have diverged;
 - [the `.claudesandbox` file](docs/ARCHITECTURE.md#5-the-claudesandbox-file): what Claude sees in the repository, opening a path or a domain;
-- [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-session-modes), and [what Claude can read on the rest of the computer](docs/ARCHITECTURE.md#reading-a-denylist);
+- [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-session-modes), and [what Claude can read on your computer](docs/ARCHITECTURE.md#reading-an-allowlist-where-users-files-live);
 - [why there is no configuration file](docs/ARCHITECTURE.md#10-configuration), [troubleshooting](docs/ARCHITECTURE.md#troubleshooting) and [limits](docs/ARCHITECTURE.md#14-limits-and-troubleshooting).
 
 Tests: `npm test` (unit tests, then end-to-end tests in the real sandbox; `jq` required), and `npm run test:linux` for the same suite on Linux, in Docker.

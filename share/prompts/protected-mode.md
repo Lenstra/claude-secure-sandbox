@@ -18,7 +18,7 @@ How this affects your work:
 
 The sandbox:
 
-- You can read the rest of the computer, except, by design: the developer's original repository, other protected repositories, credentials (SSH keys, keychain, tokens), temp directories and old Claude conversations. Do not try to read, recreate or guess hidden content.
+- @READ@ Do not try to read, recreate or guess hidden content.
 - You can write only in this copy and in your temp directory ($TMPDIR).
 - Network access is limited to an allowlist of domains, with no git host. There is no git credential and no SSH agent: do not try `git push`, `git pull` or `git fetch`.
 - When a task needs a domain or a path you cannot reach (a package registry, an SDK), say so: the developer can add it under `[domain]` or `[path]` in `.claudesandbox` at the repository root, and confirms it at the next launch.

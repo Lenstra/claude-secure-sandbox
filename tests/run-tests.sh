@@ -583,6 +583,8 @@ name="relay unreachable through the proxy";          tn sh -c 'curl -s -m 5 http
 name="relay unreachable through the proxy, by name"; tn sh -c 'curl -s -m 5 http://localhost:$RELAY_PORT/ | grep -q SECRET-'
 name="relay unreachable directly";                   tn sh -c 'curl -s -m 5 --noproxy "*" http://127.0.0.1:$RELAY_PORT/ | grep -q SECRET-'
 name="relay unreachable through its Unix socket";    tn sh -c 'curl -s -m 5 --unix-socket "$RELAY_SOCK" http://x/ | grep -q SECRET-'
+t()  { if "\$@" >/dev/null 2>&1; then echo "IN-OK \$name"; else echo "IN-FAIL \$name"; fi; }
+name="an allowed domain is reachable through the proxy"; t sh -c '[ "\$(curl -s -m 15 -o /dev/null -w "%{http_code}" https://api.anthropic.com)" != 000 ]'
 EOF
 run_claude "$T/fakebin/s-relay.sh"
 collect
@@ -651,24 +653,40 @@ if [ "$OS" = Darwin ]; then
 else
   ( cd "$F" && sleep 3 | script -q -e -c claude /dev/null ) > "$T/out/screen" 2>&1
 fi
-check "directory mode screen names the protected repository elsewhere" grep -q "Protected, hidden:   $D" "$T/out/screen"
+check "directory mode screen: the other files are hidden" grep -q "not your other files" "$T/out/screen"
 mkdir -p "$T/home/never-opened" && echo "core" > "$T/home/never-opened/.claudeprotected"
 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from claude_secure_sandbox.scan import scan; print("\n".join(scan(sys.argv[2], [sys.argv[3]])))' \
   "$ROOT" "$STATE_ROOT" "$T" > "$T/out/scan"
 check "machine scan finds the protected repositories" sh -c "grep -qx '$D' '$T/out/scan' && grep -qx '$T/home/never-opened' '$T/out/scan'"
 check_not "machine scan skips the wrapper's copies" grep -q "$STATE_ROOT" "$T/out/scan"
 if [ "$OS" = Darwin ]; then
-  ( cd "$F" && sleep 3 | script -q /dev/null claude ) > "$T/out/screen" 2>&1
+  ( cd "$T/home" && sleep 3 | script -q /dev/null claude ) > "$T/out/screen" 2>&1
 else
-  ( cd "$F" && sleep 3 | script -q -e -c claude /dev/null ) > "$T/out/screen" 2>&1
+  ( cd "$T/home" && sleep 3 | script -q -e -c claude /dev/null ) > "$T/out/screen" 2>&1
 fi
-check "screen names a protected repository found at launch, never opened" grep -q "Protected, hidden:.*~/never-opened" "$T/out/screen"
+check "home screen names a protected repository found at launch, never opened" grep -q "Protected, hidden:.*~/never-opened" "$T/out/screen"
 cat > "$T/fakebin/s-nogit.sh" <<'EOF'
 if cat loose.txt >/dev/null 2>&1; then echo "IN-OK outside a repository: the directory is readable"; else echo "IN-FAIL outside a repository: the directory is readable"; fi
 EOF
 ( cd "$T/plain/nogit" && CS_TEST_SCENARIO=$T/fakebin/s-nogit.sh claude ) < /dev/null > "$T/out/last" 2>&1
 check "directory without a repository: sandboxed" grep -q "^SANDBOXED cwd=$T/plain/nogit" "$T/out/last"
 collect
+
+section "outside the session, the user's files are hidden"
+# The tool's own files stand for any file of the user: they live where the
+# user's files do (a home directory), and the session does not need them.
+case "$ROOT" in
+  /Users/*|/home/*|/root/*|"$HOME"/*)
+    cat > "$T/fakebin/s-userfile.sh" <<EOF
+if cat "$ROOT/README.md" >/dev/null 2>&1; then echo "IN-FAIL a file of the user is hidden"; else echo "IN-OK a file of the user is hidden"; fi
+if ls /usr/bin >/dev/null 2>&1; then echo "IN-OK the system is readable"; else echo "IN-FAIL the system is readable"; fi
+EOF
+    run_claude "$T/fakebin/s-userfile.sh"
+    collect
+    ( cd "$T/plain/nogit" && CS_TEST_SCENARIO=$T/fakebin/s-userfile.sh claude ) < /dev/null > "$T/out/last" 2>&1
+    collect ;;
+  *) echo "  skip  the tool is not in a user area: $ROOT" ;;
+esac
 
 section "home directory: readable, not writable"
 echo "note" > "$T/home/notes.txt"

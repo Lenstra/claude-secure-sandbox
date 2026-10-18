@@ -113,6 +113,25 @@ class VisibleTest(unittest.TestCase):
                          (["core", "lib/secret", "top.txt"], ["core", "lib/secret"]))
 
 
+class PathToolsTest(unittest.TestCase):
+    def test_path_tools(self):
+        from types import SimpleNamespace
+        from claude_secure_sandbox.sandbox import path_tools
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ctx = SimpleNamespace(root=root, run_dir="/nonexistent/run", state_root="/nonexistent/state",
+                              protected_elsewhere=[], directory_mode=True)
+        saved = dict(os.environ)
+        try:
+            os.environ["HOME"] = root
+            os.environ["PATH"] = f"{root}/node_modules/.bin:{root}:/usr/bin:{root}/bin:relative/bin"
+            # A bin directory comes with its installation (/usr for /usr/bin); the
+            # home directory itself and the wrapper's own directories never.
+            self.assertEqual(path_tools(ctx), [f"{root}/node_modules/.bin", "/usr"])
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+
+
 class UrlHostTest(unittest.TestCase):
     def test_hosts(self):
         self.assertEqual(url_host("https://GitHub.com/org/repo.git"), "github.com")

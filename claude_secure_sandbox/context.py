@@ -39,6 +39,8 @@ class Context:
         # What the repository's .claudesandbox asks for, once confirmed.
         self.granted_paths: List[str] = []
         self.granted_domains: List[str] = []
+        # srt's own temp directory, private to the session (sandbox.make_srt_tmp).
+        self.srt_tmp = ""
         self.lock: Optional[Lock] = None
 
     @property

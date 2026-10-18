@@ -11,10 +11,11 @@ import shlex
 import shutil
 import signal
 import subprocess
+import tempfile
 from typing import List, Tuple
 
 from .common import (NAME, PLACEHOLDER_TEXT, SANDBOX_FILE, die, ensure_real_dir, log, overlaps, path_within,
-                     read_text, realpath, stamp, warn, write_text)
+                     read_text, realpath, stamp, volume_roots, warn, write_text)
 from .context import Context
 from .filtered_copy import claude_project_dir
 from .claude_config import PRIVATE_CLAUDE_ITEMS, claude_settings
@@ -42,6 +43,9 @@ CREDENTIALS = [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker/config.json
                ".config/hub", ".config/gcloud", ".password-store", "Library/Keychains",
                ".local/share/keyrings"]
 TEMP_DIRS = ["/tmp", "/private/tmp", "/var/tmp"]
+# Where users' files live: unreadable by default, like the home directory,
+# the other disks and the temp directories.
+USER_AREAS = {"Darwin": ["/Users"], "Linux": ["/home", "/root"]}
 
 # Paths of the copy's .git that Claude must not write: the wrapper's git or
 # the developer's would read configuration, hooks or objects from there.
@@ -92,17 +96,51 @@ def check_access(ctx: Context, paths: List[str], domains: List[str]) -> Tuple[Li
             die(f"{SANDBOX_FILE}: git host not allowed in [domain]: {d}")
         if local_destination(d):
             die(f"{SANDBOX_FILE}: this computer is not allowed in [domain]: {d}")
-    home = os.environ["HOME"]
-    sensitive = [ctx.state_root, os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
-    sensitive += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + _user_temp_dirs()
-    sensitive += ctx.protected_elsewhere
-    if not ctx.directory_mode:
-        sensitive += [ctx.dev_root, ctx.dev_git_common]
     for p in paths:
-        for secret in sensitive:
-            if overlaps(p, secret) or overlaps(realpath(p), realpath(secret)):
-                die(f"{SANDBOX_FILE}: [path] {p} not allowed, it overlaps {secret}")
+        secret = _overlapped_secret(ctx, p)
+        if secret:
+            die(f"{SANDBOX_FILE}: [path] {p} not allowed, it overlaps {secret}")
     return paths, domains
+
+
+def _secrets(ctx: Context) -> List[str]:
+    """Paths no allowance may open: credentials, Claude's transcripts and
+    login, the temp directories, the wrapper's state and protected code."""
+    home = os.environ["HOME"]
+    secrets = [ctx.state_root, os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
+    secrets += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + _user_temp_dirs()
+    secrets += ctx.protected_elsewhere
+    if not ctx.directory_mode:
+        secrets += [ctx.dev_root, ctx.dev_git_common]
+    return secrets
+
+
+def _overlapped_secret(ctx: Context, path: str) -> str:
+    for secret in _secrets(ctx):
+        if overlaps(path, secret) or overlaps(realpath(path), realpath(secret)):
+            return secret
+    return ""
+
+
+def path_tools(ctx: Context) -> List[str]:
+    """The tools on the developer's PATH, readable even inside the home
+    directory: each bin directory with its installation (~/.nvm/versions/
+    node/v22 for ~/.nvm/versions/node/v22/bin), never the home directory
+    itself, and never a directory that overlaps a secret."""
+    home = os.environ["HOME"]
+    own = {os.path.join(ctx.root, "bin"), os.path.join(ctx.root, "libexec"), os.path.join(ctx.run_dir, "bin")}
+    tools = []
+    for d in os.environ.get("PATH", "").split(":"):
+        if not d.startswith("/") or d in own or not os.path.isdir(d):
+            continue
+        real = realpath(d)
+        top = os.path.dirname(real) if os.path.basename(real) == "bin" else real
+        for candidate in (top, real):
+            if path_within(candidate, home) or _overlapped_secret(ctx, candidate):
+                continue
+            tools.append(candidate)
+            break
+    return tools
 
 
 def domains_overlap(a: str, b: str) -> bool:
@@ -230,24 +268,32 @@ def write_srt_settings(ctx: Context) -> None:
     else:
         for secret in secrets:
             if overlaps(secret, claude_dir):
-                die(f"the claude binary ({claude_dir}) is inside a sensitive area ({secret}): set claude_bin")
+                die(f"the claude binary ({claude_dir}) is inside a sensitive area ({secret})")
 
-    # Everything is readable, except a denylist:
+    # Reading. Where users' files live (the home directories, the other
+    # disks, the temp directories) nothing is readable, except what the
+    # session needs (below); the system and the tools installed outside the
+    # home directory are. Inside, these stay hidden even where an allowance
+    # covers them:
     # - in protected mode, the developer's repository (Claude works in the
     #   filtered copy), and every other protected repository, entirely;
     # - the wrapper's state, except what the session needs (its Claude
     #   configuration and its own directory: run/, tmp/, the copy);
     # - old Claude transcripts, which may hold protected code;
-    # - when protected code exists on the computer, its other ways in: the
-    #   credentials that open its git servers, and the temp directories that
-    #   may hold copies of it.
+    # - credentials.
+    # A session in the home directory (or above it) reads it: the user areas
+    # are then readable too, and credentials and temp directories hidden only
+    # when protected code exists on the computer.
     deny_read = [ctx.state, ctx.archive] + other_sessions(ctx) + ctx.protected_elsewhere
     deny_read += [os.path.join(ctx.state_root, e) for e in sorted(os.listdir(ctx.state_root))
                   if os.path.join(ctx.state_root, e) not in (ctx.claude_home, ctx.repo_dir)]
     deny_read += [os.path.join(home, ".claude", item) for item in PRIVATE_CLAUDE_ITEMS]
     if not ctx.directory_mode:
         deny_read += [ctx.dev_root, ctx.dev_git_common]
-    if protected_code_exists(ctx):
+    if not ctx.read_only_root:
+        deny_read += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + _user_temp_dirs()
+        deny_read += [home] + USER_AREAS.get(platform.system(), []) + volume_roots()
+    elif protected_code_exists(ctx):
         deny_read += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + _user_temp_dirs()
     deny_read = [d for d in deny_read if os.path.lexists(d)]
     # What the session needs is re-allowed only where a deny covers it (when
@@ -255,7 +301,7 @@ def write_srt_settings(ctx: Context) -> None:
     # directory would cover the writable mounts inside it.
     needed = [ctx.work, ctx.tmp, ctx.run_dir, ctx.claude_home, claude_dir, os.path.join(ctx.root, "libexec"),
               os.path.join(os.path.dirname(os.path.dirname(realpath(ctx.srt))), "vendor")]
-    needed += ctx.config_read + ctx.granted_paths
+    needed += ctx.config_read + ctx.granted_paths + path_tools(ctx) + [ctx.srt_tmp]
     allow_read = [p for p in needed if any(path_within(d, p) and d != p for d in deny_read)]
     allow_write = ([] if ctx.read_only_root else [ctx.work]) + [ctx.tmp, ctx.claude_home]
     # Protected repositories under the session's directory: not writable either.
@@ -349,11 +395,31 @@ def write_system_prompt(ctx: Context) -> None:
               "but not write it: write files in the temporary directory ($TMPDIR), and give the developer "
               "the changes or commands to apply them:" if ctx.read_only_root
               else "You work directly in this directory, and can read and write it:")
+    if ctx.read_only_root:
+        read = ("You can read the rest of the computer, except, by design: protected repositories, old Claude "
+                "conversations, and, when protected repositories exist, credentials (SSH keys, keychain, tokens) "
+                "and temp directories.")
+    else:
+        read = ("Outside this directory, you can read the system and the developer's tools (the directories on "
+                "the PATH), and the paths the developer opened in `.claudesandbox`. The developer's other files, "
+                "other disks and temp directories are hidden, by design.")
     template = (template.replace("@PLACEHOLDER@", PLACEHOLDER_TEXT).replace("@SANDBOX_FILE@", SANDBOX_FILE)
-                .replace("@ROOT@", ctx.work).replace("@ACCESS@", access))
+                .replace("@ROOT@", ctx.work).replace("@ACCESS@", access).replace("@READ@", read))
     paths = "\n".join(f"- `{p}`" for p in ctx.hidden)
     lines = [paths if line == "@PROTECTED_PATHS@" else line for line in template.split("\n")]
     write_text(os.path.join(ctx.run_dir, "system-prompt.md"), "\n".join(lines))
+
+
+def make_srt_tmp(ctx: Context) -> None:
+    """srt's own temp directory: on Linux it creates there the proxy sockets
+    it binds into the sandbox, which must stay readable. The default temp
+    directory is hidden, and a socket path is limited to 108 bytes: a short
+    directory in /tmp, private to the session, removed after it."""
+    try:
+        ctx.srt_tmp = realpath(tempfile.mkdtemp(prefix="csb-", dir="/tmp"))
+    except OSError:
+        ctx.srt_tmp = os.path.join(ctx.run_dir, "srt")
+        ensure_real_dir(ctx.srt_tmp)
 
 
 def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
@@ -372,6 +438,12 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
         "CLAUDE_CODE_SYNC_PLUGINS": "1",
         "CLAUDE_SECURE_SANDBOX_ACTIVE": "1",
     })
+    # Package manager caches, in the home directory by default, which is
+    # neither readable nor writable: per session instead.
+    cache = os.path.join(ctx.tmp, ".cache")
+    env.update({"XDG_CACHE_HOME": cache, "npm_config_cache": os.path.join(cache, "npm"),
+                "PIP_CACHE_DIR": os.path.join(cache, "pip"), "GOCACHE": os.path.join(cache, "go-build"),
+                "GOMODCACHE": os.path.join(cache, "go-mod")})
     # Java's temp directory is /tmp by default, unwritable on macOS.
     env["JAVA_TOOL_OPTIONS"] = " ".join(filter(None, [env.get("JAVA_TOOL_OPTIONS"),
                                                       f"-Djava.io.tmpdir={ctx.tmp}"]))
@@ -396,5 +468,6 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
         log("cancelled")
         return 130
     signal.signal(signal.SIGINT, lambda *_: None)
+    env["TMPDIR"] = ctx.srt_tmp
     status = subprocess.call(cmd, cwd=cwd, env=env)
     return 128 - status if status < 0 else status
