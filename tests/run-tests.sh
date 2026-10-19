@@ -255,6 +255,8 @@ EOF
 
 run_claude "$T/fakebin/s1.sh"
 check "claude runs inside the sandbox" grep -q '^SANDBOXED' "$T/out/last"
+# Every later test depends on it: show why the session did not start.
+grep -q '^SANDBOXED' "$T/out/last" || sed 's/^/        | /' "$T/out/last"
 check "claude runs in the copy" grep -q "^SANDBOXED cwd=$COPY/work" "$T/out/last"
 check "system prompt passed" grep -q -- '--append-system-prompt-file' "$T/out/last"
 check "Claude Code's own sandbox disabled" grep -q -- '"sandbox": {"enabled": false}' "$T/out/last"

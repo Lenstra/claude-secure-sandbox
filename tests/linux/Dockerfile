@@ -2,6 +2,8 @@
 # (bubblewrap). Build from the repository root:
 #   docker build -f tests/linux/Dockerfile -t claude-secure-sandbox-test .
 #   docker run --rm --privileged claude-secure-sandbox-test
+# On an Ubuntu 24.04 host, first allow user namespaces, which containers share:
+#   sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git python3 ripgrep bubblewrap socat jq fd-find openssh-client procps curl \
