@@ -138,6 +138,10 @@ def run_protected(ctx: Context, cwd: str, args: List[str], was_protected: bool) 
     common_dir = realpath(ctx.git_dev.out("rev-parse", "--path-format=absolute", "--git-common-dir"))
     if git_dir != common_dir:
         die("git worktrees are not supported (v1); run claude from the main repository")
+    # Only committed files reach Claude: without a commit, there is nothing to copy.
+    if not ctx.git_dev.ok("rev-parse", "-q", "--verify", "HEAD^{commit}", quiet=True):
+        die(f"this repository has no commit yet, and Claude only sees committed files: "
+            f"commit {SANDBOX_FILE} and what Claude may see, then run claude again")
     if os.path.isfile(os.path.join(ctx.dev_root, ".gitmodules")):
         warn("submodules are not supported (v1): their content will be missing from the copy")
     ctx.dev_git_common = common_dir

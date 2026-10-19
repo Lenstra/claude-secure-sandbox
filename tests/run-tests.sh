@@ -820,6 +820,10 @@ echo "core" > "$T/plain/badrepo/.claudeprotected"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
 check "an earlier .claudeprotected stops the launch" has "$out" 'is replaced by .claudesandbox'
 rm "$T/plain/badrepo/.claudeprotected"
+git init -q "$T/plain/no-commit" && printf '[allowed-git]\nsrc\n' > "$T/plain/no-commit/$SF"
+out=$(cd "$T/plain/no-commit" && claude 2>&1)
+check "a repository without a commit is refused, with what to do" has "$out" 'no commit yet, and Claude only sees committed files'
+rm -rf "$T/plain/no-commit"
 mkdir -p "$T/plain/nogit-protected" && printf '[allowed-git]\nx\n' > "$T/plain/nogit-protected/$SF"
 out=$(cd "$T/plain/nogit-protected" && claude 2>&1)
 check ".claudesandbox outside a git repository is refused" has "$out" 'protects a git repository'
