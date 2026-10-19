@@ -13,7 +13,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
-from .common import LEGACY_PROTECT_FILE, SANDBOX_FILE, die, path_within, realpath, volume_roots
+from .common import LEGACY_PROTECT_FILE, SANDBOX_FILE, die, git_env, path_within, realpath, volume_roots
 from .sandbox_file import ever_protected
 
 # macOS reaches the data volume through firmlinks; fd reports it under this prefix.
@@ -25,8 +25,9 @@ LOCAL_FILESYSTEMS = {"ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "jfs
 
 def find_markers(root: str, one_file_system: bool = False, timeout: float = None) -> List[str]:
     """Under root: every .claudesandbox (and earlier .claudeprotected), a
-    file or a link, and every .git, whose repository may have been protected
-    on any branch (fd, else find). Never inside .git or
+    file or a link; every .git, whose repository may have been protected on
+    any branch; every HEAD file, which may belong to a bare repository or to
+    a git directory kept apart from its work tree (fd, else find). Never inside .git or
     node_modules, and with fd not in ~/Library when root is the home
     directory (only for speed). Stops the launch if the scan does not finish
     in time: a repository it did not reach would not be hidden."""
@@ -40,10 +41,11 @@ def find_markers(root: str, one_file_system: bool = False, timeout: float = None
             cmd += ["--exclude", "/Library"]
         if one_file_system:
             cmd += ["--one-file-system"]
-        cmd += [f"^\\.({SANDBOX_FILE[1:]}|{LEGACY_PROTECT_FILE[1:]}|git)$", root]
+        cmd += [f"^(\\.({SANDBOX_FILE[1:]}|{LEGACY_PROTECT_FILE[1:]}|git)|HEAD)$", root]
     else:
         cmd = ["find", root] + (["-xdev"] if one_file_system else []) + [
             "-name", "node_modules", "-prune", "-o", "-name", ".git", "-print", "-prune", "-o",
+            "-type", "f", "-name", "HEAD", "-print", "-o",
             "(", "-type", "f", "-o", "-type", "l", ")",
             "(", "-name", SANDBOX_FILE, "-o", "-name", LEGACY_PROTECT_FILE, ")", "-print"]
     try:
@@ -86,12 +88,29 @@ def scan_roots() -> List[str]:
     return roots
 
 
+def is_git_dir(path: str) -> bool:
+    """A git directory on its own: a bare repository, or one kept apart from
+    its work tree (git init --separate-git-dir)."""
+    return all(os.path.exists(os.path.join(path, p)) for p in ("HEAD", "objects", "refs"))
+
+
+def git_dir_outside(repo: str) -> str:
+    """The git directory of a repository when it lies outside its work tree
+    (a submodule's, in the parent's .git/modules), else an empty string."""
+    proc = subprocess.run(["git", "-C", repo, "-c", "safe.directory=*", "rev-parse", "--path-format=absolute",
+                           "--git-common-dir"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          env=git_env(), encoding="utf-8", errors="surrogateescape")
+    git_dir = realpath(proc.stdout.rstrip("\n")) if proc.returncode == 0 else ""
+    return git_dir if git_dir and not path_within(repo, git_dir) else ""
+
+
 def protected_repositories(state_root: str, roots: List[str]) -> List[str]:
     """Every protected directory under roots, each scanned without leaving
     its filesystem: one that holds a .claudesandbox, and every git
-    repository that ever committed one, on any branch. Read from the disk
-    and from git at each launch, never from the wrapper's state. The state
-    itself is left out (its copies hold a .claudesandbox too)."""
+    repository that ever committed one, on any branch, with its git
+    directory when it lies elsewhere, bare repositories included. Read from
+    the disk and from git at each launch, never from the wrapper's state.
+    The state itself is left out (its copies hold a .claudesandbox too)."""
     files, repos, seen = set(), set(), set()
     for root in roots:
         real = realpath(root)
@@ -102,10 +121,16 @@ def protected_repositories(state_root: str, roots: List[str]) -> List[str]:
             directory = os.path.dirname(f)
             if platform.system() == "Darwin" and directory.startswith(MACOS_DATA + "/"):
                 directory = directory[len(MACOS_DATA):]
-            if not path_within(state_root, directory):
-                (repos if os.path.basename(f) == ".git" else files).add(directory)
+            if path_within(state_root, directory):
+                continue
+            name = os.path.basename(f)
+            if name == ".git" or (name == "HEAD" and is_git_dir(directory)):
+                repos.add(directory)
+            elif name != "HEAD":
+                files.add(directory)
     found = {d for d in files if protects(d)}
     others = sorted(repos - found)
     with ThreadPoolExecutor(max_workers=8) as pool:
         found |= {r for r, protected in zip(others, pool.map(ever_protected, others)) if protected}
+        found |= {g for g in pool.map(git_dir_outside, sorted(found)) if g}
     return sorted(found)

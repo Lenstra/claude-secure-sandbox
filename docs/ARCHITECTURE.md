@@ -138,12 +138,12 @@ Every session runs in the sandbox, with the same rules: every protected reposito
 | Writable in `.git` | everything except configuration, hooks and object store metadata | the same |
 | Retrieval | `git fetch claude` | nothing to retrieve: Claude commits in the directory |
 
-Every other protected repository of the computer is hidden entirely, not readable and not writable (section 7), including one below the session's directory. In a protected repository, a protected repository nested inside it stops the launch instead (`protected code in <path>, inside this repository: run claude from that directory`): the copy would hold its files.
+This includes a protected repository below the session's directory. In a protected repository, a protected repository nested inside it stops the launch instead (`protected code in <path>, inside this repository: run claude from that directory`): the copy would hold its files.
 
 - **Finding the real binary.** The first `claude` on the `PATH` that is not the wrapper itself (symlinks resolved).
 - **Subcommands without a session** run unchanged: `-v`, `--version`, `-h`, `--help`, `update`, `doctor`, `mcp`, `config`, `plugin`, `setup-token`, `install`, `migrate-installer`.
 - **Nested sessions.** Inside a session the wrapper is left out of the `PATH`: a `claude` started there is the real binary, already confined. Nothing in the environment makes the wrapper skip the sandbox, since a file Claude writes (an `.envrc` loaded by direnv) could set it. Started from inside the wrapper's state (a copy), it refuses.
-- **Machine scan.** At each launch, before every session, the wrapper looks for every directory that holds a `.claudesandbox`, or an earlier `.claudeprotected`, and for every git repository that ever committed one at its root, on any branch or tag, checked out or not (`scan.py`; the history of every repository is read in parallel, about 0.6 s for 77 repositories on the author's Mac, and one that does not answer in 30 s counts as protected). Protection is read from the disk and from git only, never from the wrapper's state: a repository once protected stays hidden from every other session. The roots are `/`, the home directory and every other local disk (macOS: the entries of `/Volumes`; Linux: the mount points of local filesystems in `/proc/mounts`: ext2/3/4, xfs, btrfs, zfs, f2fs, jfs, reiserfs, vfat, exfat, ntfs, ntfs3, fuseblk). Each root is scanned without leaving its filesystem (`fd --one-file-system`, else `find -xdev`; a `.claudesandbox` that is a link counts, and a scan that does not finish in 10 minutes stops the launch), skipping `.git`, `node_modules` and the wrapper's state, whose copies hold a `.claudesandbox` too. It takes about 6 s on the author's Mac; in a terminal the wrapper shows meanwhile one animated line, `claude-secure-sandbox: ⠹ looking for protected repositories on this computer 45% (3 s)`, whose percentage is estimated from the previous scan's duration (`scan-seconds` in the wrapper's state) and stays below 100 until the end; the line is erased afterwards. There is no cache and no background scan: a repository cloned a minute ago is hidden at the next launch. `CLAUDE_SECURE_SANDBOX_SCAN_ROOT` limits the scan to one directory and the session's (the tests use it).
+- **Machine scan.** At each launch, before every session, the wrapper looks for every directory that holds a `.claudesandbox`, or an earlier `.claudeprotected`, and for every git repository that ever committed one at its root, on any branch or tag, checked out or not (`scan.py`; the history of every repository is read in parallel, about 0.6 s for 77 repositories on the author's Mac, and one that does not answer in 30 s counts as protected). Protection is read from the disk and from git only, never from the wrapper's state: a repository once protected stays hidden from every other session. The roots are `/`, the home directory and every other local disk (macOS: the entries of `/Volumes`; Linux: the mount points of local filesystems in `/proc/mounts`: ext2/3/4, xfs, btrfs, zfs, f2fs, jfs, reiserfs, vfat, exfat, ntfs, ntfs3, fuseblk). Each root is scanned without leaving its filesystem (`fd --one-file-system`, else `find -xdev`; a `.claudesandbox` that is a link counts, and a scan that does not finish in 10 minutes stops the launch), skipping `.git`, `node_modules` and the wrapper's state, whose copies hold a `.claudesandbox` too. It takes about 6 s on the author's Mac; in a terminal the wrapper shows meanwhile one animated line, `claude-secure-sandbox: ⠹ looking for protected repositories on this computer (3 s)`, erased afterwards. There is no cache and no background scan: a repository cloned a minute ago is hidden at the next launch. `CLAUDE_SECURE_SANDBOX_SCAN_ROOT` limits the scan to one directory and the session's (the tests use it).
 - **Home directory.** A session started in the home directory or above it (`~`, `/Users` or `/home`, `/`, `/Volumes`), reads it (section 7) but cannot write there: programs outside the sandbox run what lives in the home directory (shell startup files, LaunchAgents, tool configurations, `~/.claude`). Claude writes only to its temp directory and gives the developer the changes to apply.
 - **Preconditions:** macOS or Linux, `git`, `rg`, `srt` installed by `npm ci`, and on Linux `bwrap` and `socat`. In a protected repository, no git worktree. Submodules trigger a warning: their content is missing from the copy. A lock (`state/lock`, which appears with its PID already in it) allows one session per directory, protected or not: two sessions would share the directory's Claude configuration; a stale lock is taken over. Starting from inside a hidden path is refused; from another subdirectory, Claude starts in the same subdirectory of the copy. Starting from inside what no session may open is refused too: another protected repository (its `.git`, or a repository nested in it; every repository above the starting directory is checked on all its history), credentials, `~/.claude`. On macOS these comparisons ignore case, as its disks usually do.
 - **Outside a protected repository** there is no copy and no end of session summary. `.git/config`, `.git/hooks` and the other locked paths of `.git` are read-only (section 7): the developer's git, outside the sandbox, would otherwise run what Claude writes there. It uses its own system prompt, `share/prompts/directory.md`.
@@ -262,17 +262,20 @@ At every launch and at the end of each session, the wrapper also checks the stru
 
 ### Performance
 
-Only commits that are new since the last launch are fetched and scanned (`state/host-tips`). The first creation scans the whole history: about 20 s to clone and 23 s to remove fingerprints on git/git (85,000 commits), measured with the prototype.
+Only commits that are new since the last launch are fetched and scanned (`state/host-tips`). The first creation scans the whole history: about 20 s to clone and 23 s to remove fingerprints on git/git (85,000 commits).
 
 ## 7. The sandbox
 
 Claude Code runs as:
 
 ```
-srt --settings run/srt-settings.json -- \
-  /usr/bin/env TMPDIR=tmp/ claude --settings '{"sandbox":{"enabled":false}}' \
+cd work/ && srt --settings run/srt-settings.json -- \
+  /bin/sh -c 'cd "$1" && shift && exec "$@"' sh <subdirectory> \
+  /usr/bin/env TMPDIR=tmp/ claude --settings '{"sandbox":{"enabled":false},"statusLine":...}' \
   --append-system-prompt-file run/system-prompt.md <developer's arguments>
 ```
+
+On macOS, in a terminal, `srt` itself runs under `node --import libexec/srt-own-terminal.mjs` (section 7).
 
 Claude Code's own sandbox is disabled because `srt` already wraps the whole process tree: every tool, shell command, local MCP server and hook started by Claude inherits the same confinement. Claude is launched by the real path of its binary, since a link that goes through a hidden area does not resolve inside the sandbox.
 
@@ -362,7 +365,7 @@ Claude Code keeps its own login in the keychain on macOS (entry `Claude Code-cre
 
 Claude Code stores transcripts in `~/.claude/projects/` and file backups in `file-history/`, which can contain protected code read before the wrapper was installed. The wrapper runs Claude with `CLAUDE_CONFIG_DIR` set to the repository's own `claude-home`, in the wrapper's state; the other repositories' are unreadable.
 
-The configuration is passed through, read only. At each launch, `CLAUDE.md`, `agents/`, `commands/`, `skills/` and `plugins/` each become a link in `claude-home` to the original in `~/.claude`, which stays readable from the sandbox (re-allowed if it lies inside a hidden area): changes made outside show at once, and nothing is duplicated per repository. `settings.json` is copied instead, and the copy is write-locked: it carries the permissions and hooks Claude Code applies, and on Linux a link could be swapped during the session. A change to the settings made inside a session (`/config`, a permission always allowed) is therefore not kept: make it outside, in `~/.claude`. Claude Code uses the developer's configuration as it is; Claude's own sandbox is disabled on the command line (`--settings`). Nothing in `~/.claude` is writable: Claude could otherwise add a hook, a skill or an MCP server that the developer's Claude would run outside the sandbox. Items that hold transcripts, history or credentials (`projects`, `file-history`, `history.jsonl`, `todos`, `shell-snapshots`, `sessions`, `.credentials.json`...) are never passed through, and are hidden from the sandbox; an item whose real path leads into the repository, the wrapper's state or `~/.ssh` is skipped.
+The configuration is passed through, read only. At each launch, `CLAUDE.md`, `agents/`, `commands/`, `skills/` and `plugins/` each become a link in `claude-home` to the original in `~/.claude`, which stays readable from the sandbox (re-allowed if it lies inside a hidden area): changes made outside show at once, and nothing is duplicated per repository. `settings.json` is copied instead, and the copy is write-locked: it carries the permissions and hooks Claude Code applies, and on Linux a link could be swapped during the session. A change to the settings made inside a session (`/config`, a permission always allowed) is therefore not kept: make it outside, in `~/.claude`. Claude Code uses the developer's configuration as it is; Claude's own sandbox is disabled on the command line (`--settings`). Nothing in `~/.claude` is writable: Claude could otherwise add a hook, a skill or an MCP server that the developer's Claude would run outside the sandbox. Items that hold transcripts, history or credentials (`projects`, `file-history`, `history.jsonl`, `todos`, `shell-snapshots`, `sessions`, `.credentials.json`...) are never passed through, and are hidden from the sandbox; an item whose real path leads into a protected repository, the wrapper's state, credentials or those private items is skipped.
 
 `plugins/` is a directory of links rather than one link: Claude Code rewrites `plugins/synced` and `plugins/store` itself when it syncs the plugins of claude.ai (`CLAUDE_CODE_SYNC_PLUGINS`, below). The sandbox keeps its own copy of these two, made from the originals the first time and then kept up to date by Claude Code in the sandbox; every other entry (`marketplaces`, installed plugins) is a read-only link. A plugin written there runs only in the sandbox.
 
@@ -426,13 +429,13 @@ sequenceDiagram
 
 ### Launch (protected repository)
 
-1. Machine scan for protected repositories (section 4); one nested inside this repository stops the launch.
-2. Repository root, `.claudesandbox`, new `[allowed-git]` entries confirmed (section 5).
-3. Lock, then update of the filtered copy (section 6). A warning is printed if the developer has uncommitted work, which Claude will not see.
+1. Repository root and `.claudesandbox`; machine scan for protected repositories (section 4): one nested inside this repository, or one around the starting directory, stops the launch.
+2. Lock, then new `[allowed-git]` entries confirmed (section 5).
+3. Update of the filtered copy (section 6). A warning is printed if the developer has uncommitted work, which Claude will not see.
 4. The `claude` remote is added to the developer's repository, or checked (section 9).
 5. The copy's branches are updated (below).
 6. `[allowed-external]` and `[allowed-domain]` entries checked and confirmed, configuration and login sync, generation of the gitconfig, the `git` link, the `srt` settings and the system prompt, all outside the writable areas.
-7. Start screen, then launch of Claude Code in `srt`, in the copy. Elsewhere, the session runs the same steps 1 and 6 to 7 (one `launch()` in `cli.py`), without the copy.
+7. Start screen, then launch of Claude Code in `srt`, in the copy. Elsewhere, the session runs steps 1, 2 (the lock), 6 and 7 (one `launch()` in `cli.py`), without the copy.
 
 ### Branches at a new session
 
@@ -683,11 +686,12 @@ Per repository, in `~/.cache/claude-secure-sandbox/<repo>-<hash>/`:
 | `work/` | filtered copy, Claude's workspace (protected repository) | read, write |
 | `tmp/` | session `TMPDIR` | read, write |
 | `claude-home/` | the sandbox's Claude configuration, sessions and login (`CLAUDE_CONFIG_DIR`) | read, write |
-| `run/` | `srt-settings.json`, `system-prompt.md`, `gitconfig`, `bin/git` | read |
+| `run/` | `srt-settings.json`, `system-prompt.md`, `gitconfig`, `gitignore` (Linux), `bin/git` | read |
 | `state/spec.git` | sparse filter specification | none |
 | `state/hidden-blobs` | fingerprints of every hidden content seen in history | none |
 | `state/hidden-paths` | every path hidden at some point in history, kept out of the sparse checkout | none |
 | `state/host-tips` | developer commits already fetched and scanned | none |
+| `state/dev-tags` | the developer's tags in the copy, so that only those are deleted when the developer deletes them; Claude's own tags stay | none |
 | `state/visible-hash` | hash of the confirmed `[allowed-git]` list | none |
 | `state/reported-absent` | visible files already reported as absent | none |
 | `state/granted` | confirmed `[allowed-git]`, `[allowed-external]` and `[allowed-domain]` entries, and whether the developer stopped protecting the repository | none |
@@ -697,7 +701,7 @@ Per repository, in `~/.cache/claude-secure-sandbox/<repo>-<hash>/`:
 
 In the developer's repository: the `claude` remote in `.git/config`.
 
-Nothing is shared between repositories: what a session could leave in a shared Claude configuration (a memory file, a transcript) would reach the sessions of another repository, whose `.claudesandbox` may allow other domains. A `~/.cache/claude-secure-sandbox/claude-home` left by an earlier version is no longer used, and is unreadable from the sandbox. At the root of the state, `scan-seconds` holds the duration of the last machine scan, for the progress line.
+Nothing is shared between repositories: what a session could leave in a shared Claude configuration (a memory file, a transcript) would reach the sessions of another repository, whose `.claudesandbox` may allow other domains.
 
 ## 17. Code layout and tests
 
@@ -711,7 +715,7 @@ claude_secure_sandbox/sandbox_file.py       .claudesandbox: reading, what Claude
 claude_secure_sandbox/access.py             what a session may reach: domains, secrets, tools on the PATH
 claude_secure_sandbox/filtered_copy.py      filtered copy: fetch, fingerprints, placeholders
 claude_secure_sandbox/session.py            claude remote, branches at launch, end of session summary
-claude_secure_sandbox/scan.py               machine scan for protected repositories (fd, rg or find), at each launch
+claude_secure_sandbox/scan.py               machine scan for protected repositories (fd or find), at each launch
 claude_secure_sandbox/claude_config.py      configuration passthrough, MCP servers, login, status line settings
 claude_secure_sandbox/screen.py             progress line, start screen, session label
 claude_secure_sandbox/sandbox.py            srt settings (read and write rules), git configuration, system prompt, launch
@@ -721,7 +725,7 @@ share/prompts/protected-repository.md       prompt in a protected repository
 share/prompts/directory.md                  prompt elsewhere
 install.sh                                  dependency check and npm ci
 uninstall.sh                                lists what to remove to uninstall, with the commands
-tests/test_unit.py                          unit tests of the pure functions
+tests/test_unit.py                          unit tests, on real files and git repositories, without the sandbox
 tests/run-tests.sh                          end-to-end tests
 tests/tui-smoke.py                          the real Claude Code in a terminal, in the sandbox: its interface reads keys
 tests/linux/Dockerfile                      Linux test environment (Debian, bubblewrap)
@@ -730,7 +734,7 @@ tests/linux/Dockerfile                      Linux test environment (Debian, bubb
 
 The CI (`.github/workflows/tests.yml`) runs on every push to `main` and every pull request: first Python 3.9 compilation, pyflakes, unit tests and shellcheck; once they pass, in parallel, the end-to-end suite and `tests/tui-smoke.py` on macOS, and on Ubuntu 24.04 in x64 and arm64 (srt ships a seccomp helper for each). On Ubuntu it first checks that, while AppArmor restricts user namespaces, the session fails without running Claude, then lifts the restriction as the README says.
 
-Run the tests with `npm test` (`jq` is needed by the end-to-end suite), and on Linux in Docker with `npm run test:linux`; the Docker image sets `TMPDIR` outside `/tmp`, because the sandbox hides `/tmp`. Containers share the host's kernel: on an Ubuntu 24.04 host, user namespaces must be allowed first (`kernel.apparmor_restrict_unprivileged_userns=0`). When the first session does not start in the sandbox, the suite prints its output. The end-to-end tests set `CLAUDE_SECURE_SANDBOX_SCAN_ROOT` to their own directory, and test the scan itself separately. Their temp directory holds protected repositories, which the machine scan of every later session would find: it is removed even after a failure or an interruption, unless `CS_TEST_KEEP=1` or `CS_TEST_DIR` is set. The unit tests cover `.claudesandbox` parsing and validation; the confirmations (asked once, narrowing without a question, no terminal, an entry removed, protection removed and restored); the refusals of `check_access` (git hosts and the remotes' hosts, every spelling of this computer, secrets, a protected repository named even through a link or a parent); the read and write rules built on a real tree (protected code and the wrapper's state never re-allowed, writes only in the session); the machine scan with fd, rg and find (a repository in a directory named `Library` found); the history scan on a real repository with odd file names; the wrapper left out of the session's `PATH`; the helpers that never follow a planted link; domain matching, URL parsing and the seccomp check. The end-to-end tests create a fake `HOME`, a test repository, a fake keychain and a fake `claude` binary that runs scenarios inside the real `srt` sandbox. They cover:
+Run the tests with `npm test` (`jq` is needed by the end-to-end suite), and on Linux in Docker with `npm run test:linux`; the Docker image sets `TMPDIR` outside `/tmp`, because the sandbox hides `/tmp`. Containers share the host's kernel: on an Ubuntu 24.04 host, user namespaces must be allowed first (`kernel.apparmor_restrict_unprivileged_userns=0`). When the first session does not start in the sandbox, the suite prints its output. The end-to-end tests set `CLAUDE_SECURE_SANDBOX_SCAN_ROOT` to their own directory, and test the scan itself separately. Their temp directory holds protected repositories, which the machine scan of every later session would find: it is removed even after a failure or an interruption, unless `CS_TEST_KEEP=1` or `CS_TEST_DIR` is set. The unit tests cover `.claudesandbox` parsing and validation; the confirmations (asked once, narrowing without a question, no terminal, an entry removed, protection removed and restored); the refusals of `check_access` (git hosts and the remotes' hosts, every spelling of this computer, secrets, a protected repository named even through a link or a parent); the read and write rules built on a real tree (protected code and the wrapper's state never re-allowed, writes only in the session); the machine scan with fd and find (a repository in a directory named `Library` found); the history scan on a real repository with odd file names; the wrapper left out of the session's `PATH`; the helpers that never follow a planted link; domain matching, URL parsing and the seccomp check. The end-to-end tests create a fake `HOME`, a test repository, a fake keychain and a fake `claude` binary that runs scenarios inside the real `srt` sandbox. They cover:
 
 - reads: a file of the user outside the session hidden and the system readable, in and outside a protected repository; the developer repository, `~/.ssh` and the signing key, old transcripts in `~/.claude`, the wrapper state, `/tmp` and the user's temp directory hidden; a locked `.git`; network filtering, and an allowed domain reachable through the proxy;
 - escape attempts: `launchctl`, `crontab`, `at`, `open`, Apple Events, clipboard, Unix sockets, localhost, a relay listening on both, `~/.zshrc`, LaunchAgents, the `xcrun` cache, and a detached process outliving the session;

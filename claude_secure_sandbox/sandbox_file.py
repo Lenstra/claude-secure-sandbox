@@ -195,16 +195,18 @@ def ever_protected(repo: str) -> bool:
     committed at the root of the repository, on any branch or tag: once
     protected, it stays protected for every other session, whatever is
     checked out. Read from git at each launch, never from the wrapper's
-    state. A repository that does not answer in 30 s counts as protected."""
+    state. A repository git cannot read (a broken ref, another user's) or
+    that does not answer in 30 s counts as protected."""
     try:
-        proc = subprocess.run(["git", "-C", repo, "-c", "core.fsmonitor=false", "-c", "log.showSignature=false",
+        proc = subprocess.run(["git", "-C", repo, "-c", "safe.directory=*", "-c", "core.fsmonitor=false",
+                               "-c", "log.showSignature=false",
                                "log", "-1", "--format=%H", "--full-history", "--all", "--",
                                f":(top,literal){SANDBOX_FILE}", f":(top,literal){LEGACY_PROTECT_FILE}"],
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=git_env(),
                               encoding="utf-8", errors="surrogateescape", timeout=30)
     except subprocess.TimeoutExpired:
         return True
-    return bool(proc.stdout.strip())
+    return proc.returncode != 0 or bool(proc.stdout.strip())
 
 
 # --- confirmations -------------------------------------------------------------

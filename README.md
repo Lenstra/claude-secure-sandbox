@@ -11,25 +11,40 @@ How it works and why it is built this way: [architecture document](docs/ARCHITEC
 
 ## Contents
 
-1. [Installation on macOS](#installation-on-macos)
-2. [Installation on Linux](#installation-on-linux)
-3. [Usage](#usage)
-4. [Uninstallation](#uninstallation)
-5. [Documentation](#documentation)
+1. [Installation](#installation)
+2. [Usage](#usage)
+3. [Uninstallation](#uninstallation)
+4. [Documentation](#documentation)
 
-## Installation on macOS
+## Installation
 
-Requirements: git, Python 3.9 or later (the one of the Xcode Command Line Tools works), Node.js 20 or later and `ripgrep`. `fd` is optional and speeds up launch.
+On macOS: git, Python 3.9 or later (the one of the Xcode Command Line Tools works), Node.js 20 or later and `ripgrep`.
 
 ```bash
 brew install ripgrep node fd
+```
+
+On Linux: git, Python 3.9 or later, Node.js 20 or later, `ripgrep`, `bubblewrap` and `socat`.
+
+```bash
+sudo apt-get install git python3 nodejs npm ripgrep bubblewrap socat fd-find   # Debian, Ubuntu
+sudo dnf install git python3 nodejs npm ripgrep bubblewrap socat fd-find       # Fedora
+sudo pacman -S git python nodejs npm ripgrep bubblewrap socat fd                # Arch
+```
+
+> [!NOTE]
+> On Ubuntu 24.04 and later, bubblewrap also needs user namespaces with capabilities: run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or add an AppArmor profile that grants `userns` to `bwrap`.
+
+`fd` is optional on both and speeds up launch. Then:
+
+```bash
 git clone git@github.com:Lenstra/claude-secure-sandbox.git ~/.local/share/claude-secure-sandbox
 cd ~/.local/share/claude-secure-sandbox
 ./install.sh
 ```
 
 > [!IMPORTANT]
-> The cloned directory is the tool itself: keep it in a permanent place, such as `~/.local/share/claude-secure-sandbox`. Not in `Downloads`, a temporary directory or a folder synced by iCloud (`~/Documents` often is). If it is moved or deleted, `claude` silently runs Claude Code without the sandbox. If you cloned it elsewhere, `install.sh` offers to move it first.
+> The cloned directory is the tool itself: keep it in a permanent place, such as `~/.local/share/claude-secure-sandbox`. Not in `Downloads`, a temporary directory or a synced folder (on macOS, `~/Documents` often is, through iCloud). If it is moved or deleted, `claude` silently runs Claude Code without the sandbox. If you cloned it elsewhere, `install.sh` offers to move it first.
 
 Then, as `install.sh` tells you with your own paths:
 
@@ -46,53 +61,14 @@ Then, as `install.sh` tells you with your own paths:
    command -v claude-unsandboxed   # .../claude-secure-sandbox/bin/claude-unsandboxed
    ```
 
-3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies Claude Code's keychain entry, and only it, into the sandbox; the rest of your keychain stays hidden.
-
-> [!IMPORTANT]
-> If `command -v claude` does not point to the wrapper, `claude` runs Claude Code without any sandbox. Check it again after updating Claude Code or changing your `PATH`.
-
-## Installation on Linux
-
-Requirements: git, Python 3.9 or later, Node.js 20 or later, `ripgrep`, `bubblewrap` and `socat`. `fd` is optional and speeds up launch.
-
-```bash
-sudo apt-get install git python3 nodejs npm ripgrep bubblewrap socat fd-find   # Debian, Ubuntu
-sudo dnf install git python3 nodejs npm ripgrep bubblewrap socat fd-find       # Fedora
-sudo pacman -S git python nodejs npm ripgrep bubblewrap socat fd                # Arch
-git clone git@github.com:Lenstra/claude-secure-sandbox.git ~/.local/share/claude-secure-sandbox
-cd ~/.local/share/claude-secure-sandbox
-./install.sh
-```
-
-> [!IMPORTANT]
-> The cloned directory is the tool itself: keep it in a permanent place, such as `~/.local/share/claude-secure-sandbox`. Not in `Downloads`, a temporary directory or a synced folder. If it is moved or deleted, `claude` silently runs Claude Code without the sandbox. If you cloned it elsewhere, `install.sh` offers to move it first.
-
-> [!NOTE]
-> On Ubuntu 24.04 and later, bubblewrap also needs user namespaces with capabilities: run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or add an AppArmor profile that grants `userns` to `bwrap`.
-
-Then, as `install.sh` tells you with your own paths:
-
-1. **Put the wrapper first on your `PATH`.** The `bin` directory holds the wrapper's two commands, `claude` and `claude-unsandboxed`. It must come before the directory of the real `claude` in your `PATH`. Add this line at the end of your shell startup file (`.bashrc` for bash, `.zshrc` or `.zprofile` for zsh):
-
-   ```bash
-   export PATH="$HOME/.local/share/claude-secure-sandbox/bin:$PATH"
-   ```
-
-2. **Check**, in a new shell, that both commands come from the wrapper:
-
-   ```bash
-   command -v claude               # .../claude-secure-sandbox/bin/claude
-   command -v claude-unsandboxed   # .../claude-secure-sandbox/bin/claude-unsandboxed
-   ```
-
-3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies `~/.claude/.credentials.json`, and only it, into the sandbox.
+3. **Log in** to Claude Code if you have not yet: `claude-unsandboxed`, then `/login`. At each launch, the wrapper copies Claude Code's login into the sandbox, and only it: the keychain entry on macOS, `~/.claude/.credentials.json` on Linux. The rest of your keychain and credentials stays hidden.
 
 > [!IMPORTANT]
 > If `command -v claude` does not point to the wrapper, `claude` runs Claude Code without any sandbox. Check it again after updating Claude Code or changing your `PATH`.
 
 ## Usage
 
-Every `claude` session runs in the sandbox, and shows it. At each launch, the wrapper first looks for protected repositories on your computer (`looking for protected repositories on this computer`, a few seconds, with a percentage estimated from the previous launch), so that it can hide them. Then a screen says what applies here, what Claude will not see and what happens to your files; press Enter to start, or Ctrl-C to cancel:
+Every `claude` session runs in the sandbox, and shows it. At each launch, the wrapper first looks for protected repositories on your computer (`looking for protected repositories on this computer`, a few seconds, with the time elapsed), so that it can hide them. Then a screen says what applies here, what Claude will not see and what happens to your files; press Enter to start, or Ctrl-C to cancel:
 
 ```
 🔒 claude-secure-sandbox

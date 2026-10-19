@@ -10,62 +10,40 @@ import threading
 import time
 from typing import Optional
 
-from .common import NAME, SANDBOX_FILE, path_within, read_lines, write_text
+from .common import NAME, SANDBOX_FILE, path_within
 from .context import Context
 
 
-def estimate(elapsed: float, previous: float) -> int:
-    """Percentage done, from the previous duration of the same step: never
-    100 before the end, since this run may be slower."""
-    return min(99, int(100 * elapsed / previous))
-
-
 class Progress:
-    """While a long step runs, one animated line on the terminal: a spinner,
-    a percentage estimated from the step's previous duration (kept in
-    duration_file), and the elapsed time. The line is erased at the end.
-    Nothing is shown without a terminal."""
+    """While a long step runs, one animated line on the terminal: a spinner
+    and the elapsed time, erased at the end. Nothing without a terminal."""
 
     FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-    def __init__(self, text: str, duration_file: str):
+    def __init__(self, text: str):
         self.text = text
-        self.duration_file = duration_file
         self.done = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self.start = 0.0
-        self.previous = 0.0
 
     def __enter__(self) -> "Progress":
         self.start = time.monotonic()
-        try:
-            self.previous = float("".join(read_lines(self.duration_file)) or 0)
-        except ValueError:
-            self.previous = 0.0
         if sys.stderr.isatty():
             self.thread = threading.Thread(target=self._draw, daemon=True)
             self.thread.start()
         return self
 
-    def __exit__(self, kind, *_) -> None:
-        elapsed = time.monotonic() - self.start
+    def __exit__(self, *_) -> None:
         if self.thread:
             self.done.set()
             self.thread.join()
             print("\r\033[K", end="", file=sys.stderr, flush=True)
-        # Only a complete run says how long the next one will take.
-        if kind is None:
-            try:
-                write_text(self.duration_file, f"{elapsed:.1f}\n")
-            except OSError:
-                pass
 
     def _draw(self) -> None:
         frame = 0
         while True:
             elapsed = time.monotonic() - self.start
-            percent = f" {estimate(elapsed, self.previous)}%" if self.previous > 0 else ""
-            line = f"{NAME}: {self.FRAMES[frame % len(self.FRAMES)]} {self.text}{percent} ({elapsed:.0f} s)"
+            line = f"{NAME}: {self.FRAMES[frame % len(self.FRAMES)]} {self.text} ({elapsed:.0f} s)"
             print(f"\r{line}\033[K", end="", file=sys.stderr, flush=True)
             frame += 1
             if self.done.wait(0.1):

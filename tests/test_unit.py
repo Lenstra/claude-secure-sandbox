@@ -1,4 +1,5 @@
-"""Unit tests for the pure functions of claude-secure-sandbox."""
+"""Unit tests of claude-secure-sandbox: functions on their own, with real
+git repositories and files where they read them, but no sandbox."""
 
 import io
 import os
@@ -26,7 +27,7 @@ from claude_secure_sandbox.sandbox_file import (Grants, SandboxFile, confirm_acc
                                                 confirm_visible, hidden_roots, is_visible, leads_to_visible,
                                                 normalize_domain, normalize_visible, sparse_escape)
 from claude_secure_sandbox.scan import protected_repositories  # noqa: E402
-from claude_secure_sandbox.screen import Progress, estimate  # noqa: E402
+from claude_secure_sandbox.screen import Progress  # noqa: E402
 
 
 # --- helpers -------------------------------------------------------------------
@@ -359,6 +360,14 @@ class EverProtectedTest(unittest.TestCase):
         git("branch", "-q", "-D", "old")
         self.assertTrue(ever_protected(repo))
 
+    def test_unreadable_repository_counts_as_protected(self):
+        from claude_secure_sandbox.sandbox_file import ever_protected
+        repo, git = _git_repo(self)
+        self.assertFalse(ever_protected(repo))
+        # A ref to an object that does not exist: git log --all fails.
+        _touch(os.path.join(repo, ".git", "refs", "heads", "broken"), "1" * 40 + "\n")
+        self.assertTrue(ever_protected(repo))
+
 
 class ConfirmAccessTest(unittest.TestCase):
     def test_asked_once_and_dropped_with_its_entry(self):
@@ -469,10 +478,10 @@ class CheckAccessTest(unittest.TestCase):
         self.protected = os.path.join(self.tmp, "protected")
         os.makedirs(os.path.join(self.protected, "src"))
         os.symlink(self.protected, os.path.join(self.tmp, "link"))
-        git = mock.Mock()
-        git.value.return_value = "remote.origin.url git@git.corp.example:org/repo.git"
-        self.ctx = SimpleNamespace(git_dev=git, protected_elsewhere=[self.protected], protected=False,
-                                   dev_root=os.path.join(self.tmp, "here"), dev_git_common="",
+        here, git = _git_repo(self)
+        git("remote", "add", "origin", "git@git.corp.example:org/repo.git")
+        self.ctx = SimpleNamespace(git_dev=git_dev(here), protected_elsewhere=[self.protected], protected=False,
+                                   dev_root=here, dev_git_common="",
                                    state_root=os.path.join(self.tmp, "state"))
 
     def refused(self, paths=(), domains=()) -> str:
@@ -688,6 +697,8 @@ class ScanTest(unittest.TestCase):
         # A .claudesandbox that is a link (dotfiles managed elsewhere).
         os.makedirs(os.path.join(self.home, "linked"))
         os.symlink(os.path.join(self.home, "p", ".claudesandbox"), os.path.join(self.home, "linked", ".claudesandbox"))
+        # Never looked for in node_modules or inside a .git.
+        _git_in(os.path.join(self.home, "x"))
         for d in ("Library/app", "x/node_modules/pkg", "x/.git/y"):
             _touch(os.path.join(self.home, d, ".claudesandbox"))
         # Protected on main, with an older branch checked out: no
@@ -719,15 +730,8 @@ class ScanTest(unittest.TestCase):
             with self.subTest(tools=tools):
                 found = self.found(tools)
                 # A repository in a directory named Library is found: only
-                # ~/Library may be skipped, and only by fd.
-                # Only fd skips ~/Library, for speed.
+                # ~/Library may be skipped, and only by fd, for speed.
                 self.assertEqual(found - {os.path.join(self.home, "Library", "app")}, self.expected)
-
-    def test_ever_protected(self):
-        from claude_secure_sandbox.sandbox_file import ever_protected
-        self.assertTrue(ever_protected(os.path.join(self.home, "branchy")))
-        self.assertFalse(ever_protected(os.path.join(self.home, "plain")))
-        self.assertFalse(ever_protected(os.path.join(self.home, "x")))
 
     def test_state_is_never_read(self):
         # A repository the wrapper knew, elsewhere: only the scan decides.
@@ -735,13 +739,33 @@ class ScanTest(unittest.TestCase):
         elsewhere = os.path.join(_tmp_tree(self), "remote-mount")
         _touch(os.path.join(elsewhere, ".claudesandbox"))
         _touch(os.path.join(state_root, "r1", "state", "repository"), elsewhere + "\n")
-        _touch(os.path.join(state_root, "r1", "state", "granted"), "protected\n")
         # The wrapper's copies hold a .claudesandbox too.
         _touch(os.path.join(state_root, "r1", "work", ".claudesandbox"))
         with mock.patch.dict(os.environ, {"HOME": self.home}):
             repos = protected_repositories(state_root, [self.home])
         self.assertNotIn(elsewhere, repos)
         self.assertFalse([r for r in repos if path_within(state_root, r)])
+
+
+class GitDirsTest(unittest.TestCase):
+    """A protected repository's git data, wherever it lives, is hidden too."""
+
+    def test_bare_clone_and_separate_git_dir(self):
+        root = _tmp_tree(self)
+        env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+        protected = os.path.join(root, "protected")
+        git = _git_in(protected)
+        _touch(os.path.join(protected, ".claudesandbox"), "[allowed-git]\nsrc\n")
+        git("add", "-A")
+        git("commit", "-qm", "protected")
+        bare = os.path.join(root, "copy.git")
+        subprocess.run(["git", "clone", "-q", "--bare", protected, bare], check=True, env=env)
+        work, apart = os.path.join(root, "work"), os.path.join(root, "apart")
+        subprocess.run(["git", "clone", "-q", "--separate-git-dir", apart, protected, work], check=True, env=env)
+        found = protected_repositories(os.path.join(root, "state"), [root])
+        for path in (protected, bare, work, apart):
+            with self.subTest(path=path):
+                self.assertIn(path, found)
 
 
 # --- what the developer sees ----------------------------------------------------
@@ -753,39 +777,26 @@ class _Terminal(io.StringIO):
 
 
 class ProgressTest(unittest.TestCase):
-    def test_estimate(self):
-        self.assertEqual(estimate(3, 6), 50)
-        # Never 100% before the end: this run may be slower than the last.
-        self.assertEqual(estimate(6, 6), 99)
-        self.assertEqual(estimate(60, 6), 99)
-
     def test_animated_line_erased_at_the_end(self):
-        durations = os.path.join(_tmp_tree(self), "seconds")
-        _touch(durations, "10\n")
         with mock.patch("sys.stderr", new_callable=_Terminal) as err:
-            with Progress("looking", durations):
+            with Progress("looking"):
                 time.sleep(0.25)
         shown = err.getvalue()
-        self.assertIn("looking 0% (0 s)", shown)
+        self.assertIn("looking (0 s)", shown)
+        self.assertNotIn("%", shown)
         self.assertTrue(shown.endswith("\r\033[K"))
-        self.assertLess(float(read_text(durations)), 10)
 
     def test_no_terminal_no_line(self):
-        durations = os.path.join(_tmp_tree(self), "seconds")
         with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
-            with Progress("looking", durations):
+            with Progress("looking"):
                 pass
         self.assertEqual(err.getvalue(), "")
-        # The duration is kept for the next run in a terminal.
-        self.assertTrue(os.path.exists(durations))
 
-    def test_interrupted_run_keeps_the_previous_duration(self):
-        durations = os.path.join(_tmp_tree(self), "seconds")
-        _touch(durations, "10\n")
-        with mock.patch("sys.stderr", new_callable=_Terminal), self.assertRaises(KeyboardInterrupt):
-            with Progress("looking", durations):
+    def test_line_erased_on_interruption(self):
+        with mock.patch("sys.stderr", new_callable=_Terminal) as err, self.assertRaises(KeyboardInterrupt):
+            with Progress("looking"):
                 raise KeyboardInterrupt
-        self.assertEqual(read_text(durations), "10\n")
+        self.assertTrue(err.getvalue().endswith("\r\033[K"))
 
 
 # --- paths and files -----------------------------------------------------------

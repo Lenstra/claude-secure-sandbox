@@ -358,6 +358,13 @@ def git_dev(dev_root: str) -> Git:
 # --- lock ----------------------------------------------------------------------
 
 
+def _lock_pid(path: str) -> int:
+    try:
+        return int(read_text(os.path.join(path, "pid")).strip())
+    except (OSError, ValueError):
+        return 0
+
+
 def _alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -382,20 +389,30 @@ class Lock:
         shutil.rmtree(mine, ignore_errors=True)
         os.mkdir(mine)
         write_text(os.path.join(mine, "pid"), f"{os.getpid()}\n")
-        for _ in range(2):
+        for _ in range(3):
             try:
                 os.rename(mine, self.path)
                 self.held = True
                 return
             except OSError:
-                try:
-                    pid = int(read_text(os.path.join(self.path, "pid")).strip())
-                except (OSError, ValueError):
-                    pid = 0
-                if pid and _alive(pid):
-                    shutil.rmtree(mine, ignore_errors=True)
-                    die(f"a {NAME} session is already running for this directory (pid {pid})")
-                shutil.rmtree(self.path, ignore_errors=True)
+                pass
+            pid = _lock_pid(self.path)
+            if pid and _alive(pid):
+                shutil.rmtree(mine, ignore_errors=True)
+                die(f"a {NAME} session is already running for this directory (pid {pid})")
+            # A stale lock: moved aside in one step, so that two launches never
+            # both remove it. If another launch took it in between, give it back.
+            aside = f"{self.path}.stale-{os.getpid()}"
+            try:
+                os.rename(self.path, aside)
+            except OSError:
+                continue
+            taken = _lock_pid(aside)
+            if taken and _alive(taken):
+                os.rename(aside, self.path)
+                shutil.rmtree(mine, ignore_errors=True)
+                die(f"a {NAME} session is already running for this directory (pid {taken})")
+            shutil.rmtree(aside, ignore_errors=True)
         shutil.rmtree(mine, ignore_errors=True)
         die(f"cannot take the lock {self.path}")
 

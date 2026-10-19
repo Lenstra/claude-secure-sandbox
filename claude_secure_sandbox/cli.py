@@ -91,27 +91,34 @@ def _ancestors(path: str) -> List[str]:
 
 def find_protected_elsewhere(ctx: Context, cwd: str, protected: bool) -> None:
     """Every other protected repository is hidden entirely: the whole computer
-    is scanned at each launch. CLAUDE_SECURE_SANDBOX_SCAN_ROOT (tests) scans
-    only that directory and the session's. A session
-    never works inside what it must not open: another protected repository
-    (its .git, for instance), credentials, the developer's Claude data."""
+    is scanned at each launch. A session never works inside what it must not
+    open: another protected repository (its .git, for instance),
+    credentials, the developer's Claude data.
+
+    CLAUDE_SECURE_SANDBOX_SCAN_ROOT (tests) scans only that directory and
+    the session's, and only when the wrapper's state lies inside it too: a
+    self-contained test tree. It says so at each launch."""
     home = os.environ["HOME"]
-    scan_root = os.environ.get("CLAUDE_SECURE_SANDBOX_SCAN_ROOT")
-    if scan_root:
+    scan_root = realpath(os.environ.get("CLAUDE_SECURE_SANDBOX_SCAN_ROOT") or "/nonexistent")
+    if os.path.isdir(scan_root) and fs_within(scan_root, ctx.state_root):
+        warn(f"test mode: only {scan_root} is scanned for protected repositories")
         repos = scan.protected_repositories(ctx.state_root, [scan_root, ctx.dev_root])
     else:
-        with Progress("looking for protected repositories on this computer",
-                      os.path.join(ctx.state_root, "scan-seconds")):
+        with Progress("looking for protected repositories on this computer"):
             repos = scan.protected_repositories(ctx.state_root, scan.scan_roots())
     if protected:
-        nested = [r for r in repos if r != ctx.dev_root and fs_within(ctx.dev_root, r)]
+        # A worktree of this repository inside it is not nested protected code.
+        own = scan.git_dir_outside(ctx.dev_root) or realpath(os.path.join(ctx.dev_root, ".git"))
+        nested = [r for r in repos if r != ctx.dev_root and fs_within(ctx.dev_root, r)
+                  and r != own and scan.git_dir_outside(r) != own]
         if nested:
             die(f"protected code in {nested[0]}, inside this repository: run claude from that directory")
     ctx.protected_elsewhere = [r for r in repos if r != ctx.dev_root]
     # Inside a protected repository where git does not find its root (its
     # .git, a repository nested in it), the session would open it directly.
     # Every repository above, even one the scan could not reach.
-    above = [d for d in _ancestors(cwd) if d != ctx.dev_root and os.path.lexists(os.path.join(d, ".git"))
+    above = [d for d in _ancestors(cwd) if d != ctx.dev_root
+             and (os.path.lexists(os.path.join(d, ".git")) or scan.is_git_dir(d))
              and (protects(d) or ever_protected(d))]
     for repo in ctx.protected_elsewhere + above:
         if fs_within(repo, ctx.dev_root):
@@ -195,7 +202,6 @@ def _main(root: str, args: List[str]) -> int:
     if not toplevel and ctx.sandbox_file.exists:
         die(f"{SANDBOX_FILE} protects a git repository, and this directory is not one: "
             "run git init, or remove the file")
-    ctx.setup_paths()
     # A repository that was ever protected, on any branch, stays protected
     # until the developer confirms otherwise (confirm_visible), even with a
     # branch checked out that has no .claudesandbox.
@@ -207,6 +213,8 @@ def _main(root: str, args: List[str]) -> int:
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, _sigterm)
     find_protected_elsewhere(ctx, cwd, protected)
+    # Only now: a refused launch leaves no state behind.
+    ctx.setup_paths()
     # One session per directory: two would share its Claude configuration,
     # which one session's Claude could rig while the other's wrapper syncs it.
     ctx.lock = Lock(ctx.state)

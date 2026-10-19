@@ -1,5 +1,5 @@
 #!/bin/bash
-# End-to-end tests for claude-secure-sandbox (macOS).
+# End-to-end tests for claude-secure-sandbox (macOS and Linux).
 #
 # Everything happens in a temporary directory: fake HOME, test repository,
 # fake claude binary that runs a scenario inside the sandbox. No real file of
@@ -65,7 +65,6 @@ export HOME=$T/home
 export GIT_CONFIG_GLOBAL=$T/home/.gitconfig
 export GIT_CONFIG_NOSYSTEM=1
 export CLAUDE_SECURE_SANDBOX_HOME=$T/home/.cache/claude-secure-sandbox
-# Scan only the home directory and the session's directory, not the computer.
 # The machine scan covers the test tree only; it is tested on its own.
 export CLAUDE_SECURE_SANDBOX_SCAN_ROOT=$T
 export CS_TEST_SECRET_JSON=$T/secret.json
@@ -81,6 +80,13 @@ STATE_ROOT=$CLAUDE_SECURE_SANDBOX_HOME
 cat > "$T/fakebin/lib.sh" <<'EOF'
 t()  { if "$@" >/dev/null 2>&1; then echo "IN-OK $name"; else echo "IN-FAIL $name"; fi; }
 tn() { if "$@" >/dev/null 2>&1; then echo "IN-FAIL $name"; else echo "IN-OK $name"; fi; }
+# True if a blob of the copy contains $1, read as stored: placeholders are
+# replace refs, which would hide a hidden content left in the copy.
+blobs_contain() {
+  GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file --batch-all-objects --batch-check='%(objectname) %(objecttype)' |
+    awk '$2=="blob"{print $1}' |
+    while read -r o; do GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file -p "$o" 2>/dev/null; done | grep -q -- "$1"
+}
 # tn, only when the tool exists: a missing tool proves nothing.
 tn_with() { local tool=$1; shift; if command -v "$tool" >/dev/null 2>&1; then tn "$@"; else echo "IN-SKIP $name ($tool not installed)"; fi; }
 EOF
@@ -158,7 +164,13 @@ if [ "$OS" = Darwin ]; then USER_TMP=$(getconf DARWIN_USER_TEMP_DIR); else USER_
 PROBE_TMP=$(mktemp /tmp/cs-probe.XXXXXX); echo "PROBE" > "$PROBE_TMP"
 PROBE_USER_TMP=$(mktemp "${USER_TMP}cs-probe.XXXXXX"); echo "PROBE" > "$PROBE_USER_TMP"
 
-COPY=$STATE_ROOT/repo-$(python3 -c 'import hashlib, sys; print(hashlib.sha1(sys.argv[1].encode()).hexdigest()[:10])' "$D")
+# The wrapper's state directory for a working directory (Context.setup_paths).
+state_dir() {
+  python3 -c 'import hashlib, os, re, sys
+d = sys.argv[2]
+print(os.path.join(sys.argv[1], re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(d)) + "-" + hashlib.sha1(d.encode()).hexdigest()[:10]))' "$STATE_ROOT" "$1"
+}
+COPY=$(state_dir "$D")
 # The developer confirmed these paths at a first launch (tested further down).
 mkdir -p "$COPY/state" && printf 'see lib/deep/public\nsee src\n' > "$COPY/state/granted"
 
@@ -230,12 +242,9 @@ name="placeholder in git log -p";                      t sh -c 'git log -p -- se
 name="git blame on a hidden file";                     t sh -c 'git blame HEAD -- secret/s.txt | grep -qF "$PLACEHOLDER"'
 name="the developer's branch is checked out";         t sh -c '[ "\$(git symbolic-ref --short HEAD)" = main ]'
 name="the developer's other branch is copied";        t git rev-parse --verify -q other
-name="no host/* branches";                            tn sh -c 'git for-each-ref refs/remotes refs/incoming | grep -q .' 
+name="no remote or incoming refs left in the copy";   tn sh -c 'git for-each-ref refs/remotes refs/incoming | grep -q .' 
 for s in $SECRETS; do
-  name="no object contains \$s"
-  if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file --batch-all-objects --batch-check='%(objectname) %(objecttype)' |
-       awk '\$2=="blob"{print \$1}' | while read o; do GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file -p \$o; done | grep -q "\$s"; then
-    echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi
+  name="no object contains \$s"; tn blobs_contain "\$s"
   name="no file contains \$s"
   tn grep -rq --exclude-dir=.git "\$s" .
 done
@@ -283,7 +292,6 @@ check "branch claude/feature-ok" git -C "$D" rev-parse -q --verify claude/featur
 check "branch claude/main" git -C "$D" rev-parse -q --verify claude/main
 check "a commit referencing hidden content does not break the fetch" git -C "$D" rev-parse -q --verify claude/bad-ref
 check "lock released" test ! -d "$COPY/state/lock"
-check "sessions separate from ~/.claude" test -f "$COPY/claude-home/settings.json"
 check "settings copied into the session, not linked" sh -c "test -f '$COPY/claude-home/settings.json' && test ! -L '$COPY/claude-home/settings.json'"
 check "~/.claude untouched by the session" sh -c "! grep -q x '$T/home/.claude/settings.json' && test ! -e '$T/home/.claude/skills/demo/new.md'"
 check "plugins passed through, except the synced ones" sh -c "test -L '$COPY/claude-home/plugins/marketplaces' && test ! -L '$COPY/claude-home/plugins/synced'"
@@ -342,7 +350,7 @@ name="sandbox Claude configuration is readable";      t cat "$CLAUDE_CONFIG_DIR/
 rm -f "$CLAUDE_CONFIG_DIR/.claude.json" && ln -s "$CS_TEST_SECRET_JSON" "$CLAUDE_CONFIG_DIR/.claude.json"
 name="copy reset to the developer's branch";          t sh -c '[ "$(git rev-parse HEAD)" = "$(cat "$CS_TEST_EXPECTED")" ]'
 name="new visible file from the developer is readable"; t grep -q "public v4" src/b.txt
-name="new secret is absent";                          tn sh -c 'GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file --batch-all-objects --batch-check="%(objectname)" | while read o; do GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file -p $o 2>/dev/null; done | grep -q SECRET-THREE'
+name="new secret is absent";                          tn blobs_contain SECRET-THREE
 name="new secret shown as placeholder";               t sh -c 'git show HEAD:secret/s.txt | grep -qF "$CS_TEST_PLACEHOLDER"'
 echo "claude diverges" > src/d.txt
 git add src/d.txt && git commit -qm "claude: diverging work" || echo "IN-FAIL commit diverging work"
@@ -356,7 +364,7 @@ check "TMPDIR is still a real directory" sh -c "test -d '$COPY/tmp' && test ! -L
 
 section "resume: --continue leaves the copy untouched"
 cat > "$T/fakebin/s3.sh" <<'EOF'
-if [ -f src/resume.txt ]; then echo "IN-OK file from the previous session kept"; else echo "IN-FAIL file from the previous session kept"; fi
+name="file from the previous session kept"; t test -f src/resume.txt
 EOF
 run_claude "$T/fakebin/s3.sh" --continue
 check "resume without reset" grep -q '^IN-OK' "$T/out/last"
@@ -367,11 +375,11 @@ check "mcpServers synced again" sh -c "jq -e .mcpServers.demo '$COPY/claude-home
 section "new session: diverged branches"
 ( cd "$D" && echo "dev work" > src/e.txt && git add -A && git commit -qm c5 )
 cat > "$T/fakebin/s-claude.sh" <<'EOF'
-if [ -f src/d.txt ] && [ ! -f src/e.txt ]; then echo "IN-OK on Claude's branch"; else echo "IN-FAIL on Claude's branch"; fi
+name="on Claude's branch"; t sh -c '[ -f src/d.txt ] && [ ! -f src/e.txt ]'
 EOF
 cat > "$T/fakebin/s-dev.sh" <<'EOF'
-if [ -f src/e.txt ] && [ ! -f src/d.txt ]; then echo "IN-OK on the developer's branch"; else echo "IN-FAIL on the developer's branch"; fi
-if git for-each-ref refs/backup | grep -q '/main$'; then echo "IN-OK Claude's branch backed up"; else echo "IN-FAIL Claude's branch backed up"; fi
+name="on the developer's branch"; t sh -c '[ -f src/e.txt ] && [ ! -f src/d.txt ]'
+name="Claude's branch backed up"; t sh -c 'git for-each-ref refs/backup | grep -q "/main$"'
 EOF
 run_claude "$T/fakebin/s-claude.sh"
 check "divergence reported" grep -q "have diverged: 1 commit(s) of yours are not in Claude's branch, 1 of Claude's" "$T/out/last"
@@ -404,8 +412,8 @@ run_claude "$T/fakebin/s-noop.sh"
 check_not "integrated branch updated without a message" grep -q "Claude's other" "$T/out/last"
 git -C "$D" branch -q -D other
 cat > "$T/fakebin/s-deleted.sh" <<'EOF'
-if git rev-parse --verify -q other >/dev/null; then echo "IN-FAIL branch deleted by the developer removed"; else echo "IN-OK branch deleted by the developer removed"; fi
-if git rev-parse --verify -q feature-ok >/dev/null; then echo "IN-OK Claude's own branch kept"; else echo "IN-FAIL Claude's own branch kept"; fi
+name="branch deleted by the developer removed"; tn git rev-parse --verify -q other
+name="Claude's own branch kept"; t git rev-parse --verify -q feature-ok
 EOF
 run_claude "$T/fakebin/s-deleted.sh"
 collect
@@ -435,7 +443,7 @@ section "[allowed-git] narrowed"
   git add -A && git commit -qm "private code"
 )
 cat > "$T/fakebin/s5.sh" <<'EOF'
-if grep -rq PRIVATE-NEW src 2>/dev/null; then echo "IN-OK private visible before it is hidden"; else echo "IN-FAIL private visible before it is hidden"; fi
+name="private visible before it is hidden"; t grep -rq PRIVATE-NEW src
 EOF
 run_claude "$T/fakebin/s5.sh"
 check "file is visible before it is hidden" grep -q '^IN-OK' "$T/out/last"
@@ -445,12 +453,7 @@ check "file is visible before it is hidden" grep -q '^IN-OK' "$T/out/last"
   git commit -qam "hide src/private"
 )
 cat > "$T/fakebin/s6.sh" <<'EOF'
-if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file --batch-all-objects --batch-check='%(objectname)' |
-   while read o; do GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file -p $o 2>/dev/null; done | grep -q PRIVATE-NEW; then
-  echo "IN-FAIL newly hidden path removed from history"
-else
-  echo "IN-OK newly hidden path removed from history"
-fi
+name="newly hidden path removed from history"; tn blobs_contain PRIVATE-NEW
 EOF
 run_claude "$T/fakebin/s6.sh"
 check "rebuild announced" grep -q "\[allowed-git\] paths of $SF changed" "$T/out/last"
@@ -469,10 +472,10 @@ collect
 git -C "$D" pull -q --ff-only claude main
 check "the developer merged the change" grep -qx secret "$D/$SF"
 cat > "$T/fakebin/s-hidden.sh" <<'EOF'
-if [ -e secret/s.txt ]; then echo "IN-FAIL secret still hidden"; else echo "IN-OK secret still hidden"; fi
+name="secret still hidden"; tn test -e secret/s.txt
 EOF
 cat > "$T/fakebin/s-visible.sh" <<'EOF'
-if grep -q SECRET-THREE secret/s.txt 2>/dev/null; then echo "IN-OK confirmed path visible"; else echo "IN-FAIL confirmed path visible"; fi
+name="confirmed path visible"; t grep -q SECRET-THREE secret/s.txt
 EOF
 run_claude "$T/fakebin/s-hidden.sh"
 check "widening detected" grep -q "shows Claude paths it could not see before" "$T/out/last"
@@ -496,21 +499,21 @@ check "confirmation dropped when hidden again" sh -c "! grep -qx 'see secret' '$
 section "a new path created by Claude, listed later by the developer"
 cat > "$T/fakebin/s-newpath.sh" <<'EOF'
 echo "all:" > Makefile && mkdir -p scripts && echo "NEW-SCRIPT" > scripts/build.sh
-if git add Makefile scripts/build.sh && git commit -qm "build scripts"; then echo "IN-OK Claude commits files at new paths"; else echo "IN-FAIL Claude commits files at new paths"; fi
-if mkdir -p secret 2>/dev/null && echo x > secret/new.txt 2>/dev/null; then echo "IN-FAIL a hidden directory stays write-locked"; else echo "IN-OK a hidden directory stays write-locked"; fi
+name="Claude commits files at new paths"; t sh -c 'git add Makefile scripts/build.sh && git commit -qm "build scripts"'
+name="a hidden directory stays write-locked"; tn sh -c 'mkdir -p secret && echo x > secret/new.txt'
 EOF
 run_claude "$T/fakebin/s-newpath.sh"
 collect
 git -C "$D" pull -q --ff-only claude main
 check "the developer got the new files" sh -c "grep -q NEW-SCRIPT '$D/scripts/build.sh' && test -f '$D/Makefile'"
 cat > "$T/fakebin/s-newpath-hidden.sh" <<'EOF'
-if [ -e Makefile ] || [ -e scripts/build.sh ]; then echo "IN-FAIL merged, not listed: hidden"; else echo "IN-OK merged, not listed: hidden"; fi
+name="merged, not listed: hidden"; tn sh -c '[ -e Makefile ] || [ -e scripts/build.sh ]'
 EOF
 run_claude "$T/fakebin/s-newpath-hidden.sh"
 collect
 ( cd "$D" && printf '[allowed-git]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\nMakefile\nscripts\n' > "$SF" && git commit -qam "show the build scripts" )
 cat > "$T/fakebin/s-newpath-visible.sh" <<'EOF'
-if grep -q NEW-SCRIPT scripts/build.sh 2>/dev/null && [ -f Makefile ]; then echo "IN-OK listed and confirmed: visible"; else echo "IN-FAIL listed and confirmed: visible"; fi
+name="listed and confirmed: visible"; t sh -c 'grep -q NEW-SCRIPT scripts/build.sh && [ -f Makefile ]'
 EOF
 run_claude_answer y "$T/fakebin/s-newpath-visible.sh"
 collect
@@ -638,7 +641,7 @@ mkdir -p "$T/plain/sub/protected"
 git init -q "$T/plain/sub/protected"
 printf '[allowed-git]\nx\n' > "$T/plain/sub/protected/$SF"
 cat > "$T/fakebin/s-below.sh" <<EOF
-if cat "$T/plain/sub/protected/$SF" >/dev/null 2>&1; then echo "IN-FAIL a protected repository below is hidden"; else echo "IN-OK a protected repository below is hidden"; fi
+name="a protected repository below is hidden"; tn cat "$T/plain/sub/protected/$SF"
 echo x > "$T/plain/sub/protected/new" 2>/dev/null
 EOF
 ( cd "$T/plain" && CS_TEST_SCENARIO=$T/fakebin/s-below.sh claude ) < /dev/null > "$T/out/last" 2>&1
@@ -684,7 +687,7 @@ check_not "machine scan skips the wrapper's copies" grep -q "$STATE_ROOT" "$T/ou
 ( cd "$T/home" && sleep 3 | claude_in_terminal ) > "$T/out/screen" 2>&1
 check "home screen names a protected repository found at launch, never opened" grep -q "Protected, hidden:.*~/never-opened" "$T/out/screen"
 cat > "$T/fakebin/s-nogit.sh" <<'EOF'
-if cat loose.txt >/dev/null 2>&1; then echo "IN-OK outside a repository: the directory is readable"; else echo "IN-FAIL outside a repository: the directory is readable"; fi
+name="outside a repository: the directory is readable"; t cat loose.txt
 EOF
 ( cd "$T/plain/nogit" && CS_TEST_SCENARIO=$T/fakebin/s-nogit.sh claude ) < /dev/null > "$T/out/last" 2>&1
 check "directory without a repository: sandboxed" grep -q "^SANDBOXED cwd=$T/plain/nogit" "$T/out/last"
@@ -696,8 +699,8 @@ section "outside the session, the user's files are hidden"
 case "$ROOT" in
   /Users/*|/home/*|/root/*|"$HOME"/*)
     cat > "$T/fakebin/s-userfile.sh" <<EOF
-if cat "$ROOT/README.md" >/dev/null 2>&1; then echo "IN-FAIL a file of the user is hidden"; else echo "IN-OK a file of the user is hidden"; fi
-if ls /usr/bin >/dev/null 2>&1; then echo "IN-OK the system is readable"; else echo "IN-FAIL the system is readable"; fi
+name="a file of the user is hidden"; tn cat "$ROOT/README.md"
+name="the system is readable"; t ls /usr/bin
 EOF
     run_claude "$T/fakebin/s-userfile.sh"
     collect
@@ -708,7 +711,7 @@ esac
 
 section "home directory: readable, not writable"
 echo "note" > "$T/home/notes.txt"
-HOME_RUN=$STATE_ROOT/home-$(python3 -c 'import hashlib, sys; print(hashlib.sha1(sys.argv[1].encode()).hexdigest()[:10])' "$T/home")/run
+HOME_RUN=$(state_dir "$T/home")/run
 cat > "$T/fakebin/s-home.sh" <<EOF
 name="home: the home directory is readable";              t cat "$T/home/notes.txt"
 name="home: credentials hidden, protected code exists";   tn cat "$T/home/.ssh/id_test"
@@ -729,8 +732,8 @@ collect
 check "home: nothing written in the home directory" test ! -e "$T/home/written-by-claude"
 check "home: status line says read only" grep -q -- '(read only)' "$T/out/last"
 cat > "$T/fakebin/s-root.sh" <<EOF
-if cat "$D/src/a.txt" >/dev/null 2>&1; then echo "IN-FAIL from /: protected repositories hidden"; else echo "IN-OK from /: protected repositories hidden"; fi
-if echo x > "$T/plain/written-from-root" 2>/dev/null; then echo "IN-FAIL from /: nothing writable"; else echo "IN-OK from /: nothing writable"; fi
+name="from /: protected repositories hidden"; tn cat "$D/src/a.txt"
+name="from /: nothing writable"; tn sh -c 'echo x > "$T/plain/written-from-root"'
 EOF
 ( cd / && CS_TEST_SCENARIO=$T/fakebin/s-root.sh claude ) < /dev/null > "$T/out/last" 2>&1
 check "from /: session started, read only" grep -q -- "^SANDBOXED cwd=/$" "$T/out/last"
@@ -772,13 +775,23 @@ mkdir -p "$D/vendor/dep" && git init -q "$D/vendor/dep"
 out=$(cd "$D/vendor/dep" && claude 2>&1)
 check "refused from a repository nested in the protected one" has "$out" "lies inside the protected repository $D"
 rm -rf "$D/vendor"
+# A worktree of the protected repository, inside it: not nested protected
+# code from the repository, and refused from inside.
+git -C "$D" worktree add -q "$D/.wt/x" -b wt-test
+run_claude "$T/fakebin/s-noop.sh"
+check "a worktree inside the protected repository does not block it" grep -q '^SANDBOXED' "$T/out/last"
+out=$(cd "$D/.wt/x" && claude 2>&1)
+check "refused from that worktree, with the repository to start from" has "$out" "lies inside the protected repository $D: run claude from $D"
+git -C "$D" worktree remove --force "$D/.wt/x" && git -C "$D" branch -q -D wt-test && rm -rf "$D/.wt"
 # Every other session hides the protected repository by its own rule, not
 # only because it lies in a closed area.
+sessions=0; missing=
 for f in "$STATE_ROOT"/*/run/srt-settings.json; do
   case "$f" in "$COPY"/*) continue ;; esac
-  jq -e --arg d "$D" '.filesystem.denyRead | index($d)' "$f" >/dev/null || fail "the protected repository is denied in $f"
+  sessions=$((sessions + 1))
+  jq -e --arg d "$D" '.filesystem.denyRead | index($d)' "$f" >/dev/null || missing="$missing $f"
 done
-ok "other sessions deny the protected repository explicitly"
+check "other sessions deny the protected repository explicitly" sh -c "[ $sessions -gt 2 ] && [ -z '$missing' ]"
 mkdir -p "$T/plain/badrepo" && git init -q "$T/plain/badrepo"
 printf '[allowed-git]\n/etc/passwd\n' > "$T/plain/badrepo/$SF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
@@ -820,7 +833,7 @@ SDK=$ROOT/share/prompts
 # Another protected repository, by its path, a folder inside it, and a link to it.
 ln -s "$D" "$T/link-to-protected"
 mkdir -p "$A" && git init -q "$A" && git -C "$A" commit -q --allow-empty -m init
-ACCESS_SETTINGS=$STATE_ROOT/access-$(python3 -c 'import hashlib, sys; print(hashlib.sha1(sys.argv[1].encode()).hexdigest()[:10])' "$A")/run/srt-settings.json
+ACCESS_SETTINGS=$(state_dir "$A")/run/srt-settings.json
 for entry in "[allowed-domain]\ngithub.com" "[allowed-domain]\napi.githubcopilot.com" "[allowed-domain]\napi.github.com" "[allowed-domain]\n*.com" "[allowed-domain]\nlocalhost:5037" "[allowed-domain]\n127.0.0.1" "[allowed-external]\n~/.ssh" "[allowed-external]\n~/.claude" "[allowed-external]\n/tmp" "[allowed-external]\n$STATE_ROOT" "[allowed-external]\n~" "[allowed-external]\n$D" "[allowed-external]\n$D/src" "[allowed-external]\n$T/link-to-protected"; do
   printf "$entry\n" > "$A/$SF"
   ( cd "$A" && claude ) < /dev/null > "$T/out/last" 2>&1
@@ -839,7 +852,7 @@ check_not "without a terminal: domain not opened" grep -q registry.npmjs.org "$A
 check "answer no: not allowed" grep -q "not allowed for this session" "$T/out/last"
 check_not "answer no: domain not opened" grep -q registry.npmjs.org "$ACCESS_SETTINGS"
 cat > "$T/fakebin/s-access.sh" <<EOF
-if grep -q sandbox "$SDK/directory.md" 2>/dev/null; then echo "IN-OK an allowed path is readable"; else echo "IN-FAIL an allowed path is readable"; fi
+name="an allowed path is readable"; t grep -q sandbox "$SDK/directory.md"
 EOF
 ( cd "$A" && CS_TEST_SCENARIO=$T/fakebin/s-access.sh run_in_terminal y ) > "$T/out/last" 2>&1
 check "answer yes: allowed" grep -q "access allowed" "$T/out/last"
@@ -864,13 +877,13 @@ git init -q "$W" && (
   git add -A && git commit -qm init
 )
 cat > "$T/fakebin/s-whole-hidden.sh" <<'EOF'
-if [ -e src/a.txt ]; then echo "IN-FAIL an empty file hides everything"; else echo "IN-OK an empty file hides everything"; fi
+name="an empty file hides everything"; tn test -e src/a.txt
 EOF
 ( cd "$W" && CS_TEST_SCENARIO=$T/fakebin/s-whole-hidden.sh claude ) < /dev/null > "$T/out/last" 2>&1
 collect
 ( cd "$W" && printf '[allowed-git]\n.\n' > "$SF" && git commit -qam "show everything" )
 cat > "$T/fakebin/s-whole-visible.sh" <<'EOF'
-if grep -q WHOLE-SRC src/a.txt 2>/dev/null; then echo "IN-OK \".\" shows the whole repository"; else echo "IN-FAIL \".\" shows the whole repository"; fi
+name="\".\" shows the whole repository"; t grep -q WHOLE-SRC src/a.txt
 EOF
 ( cd "$W" && CS_TEST_SCENARIO=$T/fakebin/s-whole-visible.sh run_in_terminal y ) > "$T/out/last" 2>&1
 collect
@@ -884,7 +897,7 @@ git init -q "$E" && (
   git rm -q "$SF" && git commit -qm "no protection left"
 )
 cat > "$T/fakebin/s-removed.sh" <<'EOF'
-if [ -e core/c.txt ]; then echo "IN-FAIL a repository that was protected stays protected"; else echo "IN-OK a repository that was protected stays protected"; fi
+name="a repository that was protected stays protected"; tn test -e core/c.txt
 EOF
 ( cd "$E" && CS_TEST_SCENARIO=$T/fakebin/s-removed.sh claude ) < /dev/null > "$T/out/last" 2>&1
 check "removal of the file detected" grep -q "is gone: Claude would read all of it" "$T/out/last"
