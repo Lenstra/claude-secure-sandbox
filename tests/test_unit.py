@@ -26,43 +26,47 @@ from claude_secure_sandbox.sandbox_file import (Grants, SandboxFile, confirm_acc
 from claude_secure_sandbox.scan import find_sandbox_files, protected_repositories  # noqa: E402
 
 
-class NormalizeVisibleTest(unittest.TestCase):
-    def test_literal_paths(self):
-        self.assertEqual(normalize_visible("core/engine"), "core/engine")
-        self.assertEqual(normalize_visible("./core//engine/"), "core/engine")
-        self.assertEqual(normalize_visible("a/./b"), "a/b")
-
-    def test_refused(self):
-        cases = {
-            "/etc/passwd": "absolute path",
-            "src/*.go": "pattern not supported",
-            "!core": "pattern not supported",
-            "a/[b]": "pattern not supported",
-            "../outside": "outside the repository root",
-            "a/../b": "outside the repository root",
-            ".git/config": ".git path",
-            "sub/.git/x": ".git path",
-            ".claudesandbox": "always visible",
-        }
-        for line, message in cases.items():
-            with self.subTest(line=line):
-                with self.assertRaises(ValueError) as e:
-                    normalize_visible(line)
-                self.assertIn(message, str(e.exception))
+# --- helpers -------------------------------------------------------------------
 
 
-class PathTest(unittest.TestCase):
-    def test_path_within(self):
-        self.assertTrue(path_within("/a/b", "/a/b"))
-        self.assertTrue(path_within("/a/b", "/a/b/c"))
-        self.assertFalse(path_within("/a/b", "/a/bc"))
-        self.assertFalse(path_within("/a/b/c", "/a/b"))
+def _tmp_tree(test: unittest.TestCase) -> str:
+    """A real temporary directory, removed after the test."""
+    d = os.path.realpath(tempfile.mkdtemp(prefix="csb-unit-"))
+    test.addCleanup(shutil.rmtree, d, True)
+    return d
 
-    def test_sparse_escape(self):
-        self.assertEqual(sparse_escape("a[1]*?.txt"), r"a\[1\]\*\?.txt")
-        self.assertEqual(sparse_escape("!x"), r"\!x")
-        self.assertEqual(sparse_escape("#x"), r"\#x")
-        self.assertEqual(sparse_escape("x "), "x\\ ")
+
+def _touch(path: str, text: str = "") -> str:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+    return path
+
+
+class _Answers:
+    """Replaces the terminal: each question takes the next answer (None: no terminal)."""
+
+    def __init__(self, test: unittest.TestCase, *answers):
+        self.answers = list(answers)
+        self.questions = []
+        for patcher in (mock.patch("claude_secure_sandbox.sandbox_file.ask", side_effect=self.ask),
+                        mock.patch("sys.stderr", new_callable=io.StringIO)):
+            patcher.start()
+            test.addCleanup(patcher.stop)
+
+    def ask(self, question):
+        self.questions.append(question)
+        return self.answers.pop(0)
+
+
+def _on_disk(content: str) -> SandboxFile:
+    """A .claudesandbox read from disk, which protects its repository."""
+    f = SandboxFile(content)
+    f.exists = True
+    return f
+
+
+# --- .claudesandbox: reading ---------------------------------------------------
 
 
 class SandboxFileTest(unittest.TestCase):
@@ -95,7 +99,54 @@ class SandboxFileTest(unittest.TestCase):
                 self.assertIn(message, errors[0])
 
 
+class NormalizeVisibleTest(unittest.TestCase):
+    def test_literal_paths(self):
+        self.assertEqual(normalize_visible("core/engine"), "core/engine")
+        self.assertEqual(normalize_visible("./core//engine/"), "core/engine")
+        self.assertEqual(normalize_visible("a/./b"), "a/b")
+
+    def test_refused(self):
+        cases = {
+            "/etc/passwd": "absolute path",
+            "src/*.go": "pattern not supported",
+            "!core": "pattern not supported",
+            "a/[b]": "pattern not supported",
+            "../outside": "outside the repository root",
+            "a/../b": "outside the repository root",
+            ".git/config": ".git path",
+            "sub/.git/x": ".git path",
+            ".claudesandbox": "always visible",
+        }
+        for line, message in cases.items():
+            with self.subTest(line=line):
+                with self.assertRaises(ValueError) as e:
+                    normalize_visible(line)
+                self.assertIn(message, str(e.exception))
+
+
+class NormalizeDomainTest(unittest.TestCase):
+    def test_addresses(self):
+        self.assertEqual(normalize_domain("[::1]"), "[::1]")
+        self.assertEqual(normalize_domain("[2001:DB8::1]:8443"), "[2001:db8::1]:8443")
+        self.assertEqual(normalize_domain("10.0.0.5:8080"), "10.0.0.5:8080")
+
+    def test_refused(self):
+        for entry in ("[garbage", "[::1", "[1.2.3.4]", "[::1]x", "[::1]:", "*", "*:443",
+                      "https://x.com", "x.com/path", "-x.com", "x_y.com"):
+            with self.subTest(entry=entry), self.assertRaises(ValueError):
+                normalize_domain(entry)
+
+
+# --- what Claude sees in a protected repository --------------------------------
+
+
 class VisibleTest(unittest.TestCase):
+    def test_sparse_escape(self):
+        self.assertEqual(sparse_escape("a[1]*?.txt"), r"a\[1\]\*\?.txt")
+        self.assertEqual(sparse_escape("!x"), r"\!x")
+        self.assertEqual(sparse_escape("#x"), r"\#x")
+        self.assertEqual(sparse_escape("x "), "x\\ ")
+
     def test_whole_repository(self):
         self.assertEqual(normalize_visible("."), ".")
         self.assertEqual(normalize_visible("./"), ".")
@@ -118,124 +169,6 @@ class VisibleTest(unittest.TestCase):
                  ".claudesandbox"]
         self.assertEqual(hidden_roots(["src", "lib/public"], files),
                          (["core", "lib/secret", "top.txt"], ["core", "lib/secret"]))
-
-
-class SeccompTest(unittest.TestCase):
-    def test_missing_helper_refused_on_linux(self):
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        srt = os.path.join(root, "node_modules", ".bin", "srt")
-        with mock.patch.object(platform, "system", return_value="Linux"):
-            with mock.patch.object(platform, "machine", return_value="riscv64"), \
-                    mock.patch("sys.stderr"), self.assertRaises(SystemExit):
-                check_seccomp(srt)
-            with mock.patch.object(platform, "machine", return_value="x86_64"):
-                if os.path.exists(srt):
-                    check_seccomp(srt)
-
-
-class PathToolsTest(unittest.TestCase):
-    def test_path_tools(self):
-        tmp = _tmp_tree(self)
-        home, root = os.path.join(tmp, "home"), os.path.join(tmp, "tool")
-        node = os.path.join(home, ".nvm", "versions", "node", "v22")
-        for d in (os.path.join(node, "bin"), os.path.join(home, "scripts"), os.path.join(home, ".ssh", "bin"),
-                  os.path.join(root, "bin"), os.path.join(root, "libexec")):
-            os.makedirs(d)
-        ctx = SimpleNamespace(root=root, run_dir=os.path.join(tmp, "run"), state_root=os.path.join(tmp, "state"),
-                              protected_elsewhere=[], protected=False)
-        path = [f"{node}/bin", os.path.join(home, "scripts"), home, tmp, "/usr/bin", f"{home}/.ssh/bin",
-                f"{root}/bin", f"{root}/libexec", f"{home}/missing/bin", "relative/bin"]
-        # The test tree lies in a temp directory, itself never readable.
-        with mock.patch.dict(os.environ, {"HOME": home, "PATH": ":".join(path)}), \
-                mock.patch("claude_secure_sandbox.access.TEMP_DIRS", []), \
-                mock.patch("claude_secure_sandbox.access.user_temp_dirs", return_value=[]):
-            # A bin directory comes with its installation (~/.nvm/versions/node/v22,
-            # /usr); never the home directory or above, a secret, the wrapper's own
-            # directories, a missing or relative one.
-            self.assertEqual(path_tools(ctx), [node, os.path.join(home, "scripts"), "/usr"])
-
-
-class UrlHostTest(unittest.TestCase):
-    def test_hosts(self):
-        self.assertEqual(url_host("https://GitHub.com/org/repo.git"), "github.com")
-        self.assertEqual(url_host("ssh://git@git.example.com:2222/repo"), "git.example.com")
-        self.assertEqual(url_host("git@gitlab.com:org/repo.git"), "gitlab.com")
-        self.assertEqual(url_host("https://user:pw@[::1]:8080/x"), "[::1]")
-
-    def test_local_paths(self):
-        for url in ("/srv/repo.git", "./repo", "../repo", "file:///srv/repo", "repo"):
-            with self.subTest(url=url):
-                self.assertEqual(url_host(url), "")
-
-
-class DomainsOverlapTest(unittest.TestCase):
-    def test_overlap(self):
-        for a, b in (("github.com", "github.com"), ("api.github.com", "*.github.com"),
-                     ("*.github.com", "*.github.com"), ("*.com", "*.github.com"), ("*.com", "github.com"),
-                     ("api.githubcopilot.com:443", "*.githubcopilot.com")):
-            with self.subTest(a=a, b=b):
-                self.assertTrue(domains_overlap(a, b))
-                self.assertTrue(domains_overlap(b, a))
-
-    def test_no_overlap(self):
-        for a, b in (("notgithub.com", "*.github.com"), ("registry.npmjs.org", "github.com"),
-                     ("github.com.evil.io", "github.com")):
-            with self.subTest(a=a, b=b):
-                self.assertFalse(domains_overlap(a, b))
-                self.assertFalse(domains_overlap(b, a))
-
-
-class LocalDestinationTest(unittest.TestCase):
-    def test_this_computer(self):
-        for entry in ("localhost", "*.localhost", "app.localhost:3000", "127.0.0.1", "127.1.2.3:5037",
-                      "::1", "[::1]:8080", "0.0.0.0", "169.254.169.254", "[fe80::1]"):
-            with self.subTest(entry=entry):
-                self.assertTrue(local_destination(entry))
-
-    def test_other_hosts(self):
-        for entry in ("api.anthropic.com", "registry.npmjs.org:443", "*.example.com", "10.0.0.5",
-                      "192.168.1.10", "localhost.example.com"):
-            with self.subTest(entry=entry):
-                self.assertFalse(local_destination(entry))
-
-
-# --- what guards the sandbox ---------------------------------------------------
-
-
-def _tmp_tree(test: unittest.TestCase) -> str:
-    """A real temporary directory, removed after the test."""
-    d = os.path.realpath(tempfile.mkdtemp(prefix="csb-unit-"))
-    test.addCleanup(shutil.rmtree, d, True)
-    return d
-
-
-def _touch(path: str, text: str = "") -> str:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(text)
-    return path
-
-
-class NormalizeDomainTest(unittest.TestCase):
-    def test_addresses(self):
-        self.assertEqual(normalize_domain("[::1]"), "[::1]")
-        self.assertEqual(normalize_domain("[2001:DB8::1]:8443"), "[2001:db8::1]:8443")
-        self.assertEqual(normalize_domain("10.0.0.5:8080"), "10.0.0.5:8080")
-
-    def test_refused(self):
-        for entry in ("[garbage", "[::1", "[1.2.3.4]", "[::1]x", "[::1]:", "*", "*:443",
-                      "https://x.com", "x.com/path", "-x.com", "x_y.com"):
-            with self.subTest(entry=entry), self.assertRaises(ValueError):
-                normalize_domain(entry)
-
-
-class LocalDestinationFormsTest(unittest.TestCase):
-    def test_other_spellings_of_this_computer(self):
-        # Resolvers accept short and numeric IPv4 forms, and IPv4-mapped IPv6.
-        for entry in ("127.1", "2130706433", "0x7f.1", "0", "0x7f000001:22", "[::ffff:127.0.0.1]",
-                      "[::]", "LOCALHOST"):
-            with self.subTest(entry=entry):
-                self.assertTrue(local_destination(entry.lower()))
 
 
 class ParseRawLogTest(unittest.TestCase):
@@ -286,6 +219,9 @@ class ParseRawLogTest(unittest.TestCase):
         self.assertEqual(paths, {'core/quo"te\tx.c'})
 
 
+# --- confirmations -------------------------------------------------------------
+
+
 class GrantsTest(unittest.TestCase):
     def test_kinds_are_independent(self):
         state = _tmp_tree(self)
@@ -311,41 +247,19 @@ class GrantsTest(unittest.TestCase):
         write.assert_not_called()
 
 
-class _Answers:
-    """Replaces the terminal: each question takes the next answer (None: no terminal)."""
-
-    def __init__(self, test: unittest.TestCase, *answers):
-        self.answers = list(answers)
-        self.questions = []
-        for patcher in (mock.patch("claude_secure_sandbox.sandbox_file.ask", side_effect=self.ask),
-                        mock.patch("sys.stderr", new_callable=io.StringIO)):
-            patcher.start()
-            test.addCleanup(patcher.stop)
-
-    def ask(self, question):
-        self.questions.append(question)
-        return self.answers.pop(0)
-
-
-def _file(content: str) -> SandboxFile:
-    f = SandboxFile(content)
-    f.exists = True
-    return f
-
-
 class ConfirmVisibleTest(unittest.TestCase):
     def test_widening_asks_once(self):
         state = _tmp_tree(self)
         answers = _Answers(self, "y")
-        self.assertEqual(confirm_visible(state, _file("[allowed-git]\nsrc\n"), False), (True, ["src"]))
-        self.assertEqual(confirm_visible(state, _file("[allowed-git]\nsrc\n"), False), (True, ["src"]))
+        self.assertEqual(confirm_visible(state, _on_disk("[allowed-git]\nsrc\n"), False), (True, ["src"]))
+        self.assertEqual(confirm_visible(state, _on_disk("[allowed-git]\nsrc\n"), False), (True, ["src"]))
         self.assertEqual(len(answers.questions), 1)
 
     def test_narrowing_never_asks(self):
         state = _tmp_tree(self)
         Grants(state).set("see", ["."])
         answers = _Answers(self)
-        self.assertEqual(confirm_visible(state, _file("[allowed-git]\nsrc/a\nlib\n"), False),
+        self.assertEqual(confirm_visible(state, _on_disk("[allowed-git]\nsrc/a\nlib\n"), False),
                          (True, ["lib", "src/a"]))
         self.assertEqual(answers.questions, [])
 
@@ -354,7 +268,7 @@ class ConfirmVisibleTest(unittest.TestCase):
         Grants(state).set("see", ["src"])
         _Answers(self, "n", None, "")
         for _ in range(3):
-            self.assertEqual(confirm_visible(state, _file("[allowed-git]\nsrc\ncore\n"), False),
+            self.assertEqual(confirm_visible(state, _on_disk("[allowed-git]\nsrc\ncore\n"), False),
                              (True, ["src"]))
         self.assertEqual(Grants(state).get("see"), ["src"])
 
@@ -362,16 +276,16 @@ class ConfirmVisibleTest(unittest.TestCase):
         state = _tmp_tree(self)
         Grants(state).set("see", ["src", "core"])
         answers = _Answers(self, "n")
-        confirm_visible(state, _file("[allowed-git]\nsrc\n"), False)
+        confirm_visible(state, _on_disk("[allowed-git]\nsrc\n"), False)
         self.assertEqual(Grants(state).get("see"), ["src"])
         # Listed again: asked again.
-        confirm_visible(state, _file("[allowed-git]\nsrc\ncore\n"), False)
+        confirm_visible(state, _on_disk("[allowed-git]\nsrc\ncore\n"), False)
         self.assertEqual(len(answers.questions), 1)
 
     def test_empty_file_hides_everything(self):
         state = _tmp_tree(self)
         Grants(state).set("see", ["src"])
-        self.assertEqual(confirm_visible(state, _file(""), False), (True, []))
+        self.assertEqual(confirm_visible(state, _on_disk(""), False), (True, []))
 
     def test_never_protected(self):
         state = _tmp_tree(self)
@@ -396,7 +310,7 @@ class ConfirmVisibleTest(unittest.TestCase):
         state = _tmp_tree(self)
         Grants(state).set("unprotected", [""])
         answers = _Answers(self, "y")
-        self.assertEqual(confirm_visible(state, _file("[allowed-git]\nsrc\n"), True), (True, ["src"]))
+        self.assertEqual(confirm_visible(state, _on_disk("[allowed-git]\nsrc\n"), True), (True, ["src"]))
         self.assertEqual(len(answers.questions), 1)
         self.assertEqual(Grants(state).get("unprotected"), [])
 
@@ -421,6 +335,63 @@ class ConfirmAccessTest(unittest.TestCase):
         state = _tmp_tree(self)
         _Answers(self, None)
         self.assertEqual(confirm_access(state, ["/opt/sdk"], []), ([], []))
+
+
+# --- network -------------------------------------------------------------------
+
+
+class UrlHostTest(unittest.TestCase):
+    def test_hosts(self):
+        self.assertEqual(url_host("https://GitHub.com/org/repo.git"), "github.com")
+        self.assertEqual(url_host("ssh://git@git.example.com:2222/repo"), "git.example.com")
+        self.assertEqual(url_host("git@gitlab.com:org/repo.git"), "gitlab.com")
+        self.assertEqual(url_host("https://user:pw@[::1]:8080/x"), "[::1]")
+
+    def test_local_paths(self):
+        for url in ("/srv/repo.git", "./repo", "../repo", "file:///srv/repo", "repo"):
+            with self.subTest(url=url):
+                self.assertEqual(url_host(url), "")
+
+
+class DomainsOverlapTest(unittest.TestCase):
+    def test_overlap(self):
+        for a, b in (("github.com", "github.com"), ("api.github.com", "*.github.com"),
+                     ("*.github.com", "*.github.com"), ("*.com", "*.github.com"), ("*.com", "github.com"),
+                     ("api.githubcopilot.com:443", "*.githubcopilot.com")):
+            with self.subTest(a=a, b=b):
+                self.assertTrue(domains_overlap(a, b))
+                self.assertTrue(domains_overlap(b, a))
+
+    def test_no_overlap(self):
+        for a, b in (("notgithub.com", "*.github.com"), ("registry.npmjs.org", "github.com"),
+                     ("github.com.evil.io", "github.com")):
+            with self.subTest(a=a, b=b):
+                self.assertFalse(domains_overlap(a, b))
+                self.assertFalse(domains_overlap(b, a))
+
+
+class LocalDestinationTest(unittest.TestCase):
+    def test_this_computer(self):
+        for entry in ("localhost", "*.localhost", "app.localhost:3000", "127.0.0.1", "127.1.2.3:5037",
+                      "::1", "[::1]:8080", "0.0.0.0", "169.254.169.254", "[fe80::1]"):
+            with self.subTest(entry=entry):
+                self.assertTrue(local_destination(entry))
+
+    def test_other_hosts(self):
+        for entry in ("api.anthropic.com", "registry.npmjs.org:443", "*.example.com", "10.0.0.5",
+                      "192.168.1.10", "localhost.example.com"):
+            with self.subTest(entry=entry):
+                self.assertFalse(local_destination(entry))
+
+    def test_other_spellings_of_this_computer(self):
+        # Resolvers accept short and numeric IPv4 forms, and IPv4-mapped IPv6.
+        for entry in ("127.1", "2130706433", "0x7f.1", "0", "0x7f000001:22", "[::ffff:127.0.0.1]",
+                      "[::]", "LOCALHOST"):
+            with self.subTest(entry=entry):
+                self.assertTrue(local_destination(entry.lower()))
+
+
+# --- access: what a session may reach ------------------------------------------
 
 
 class CheckAccessTest(unittest.TestCase):
@@ -472,57 +443,36 @@ class CheckAccessTest(unittest.TestCase):
         check_access(self.ctx, ["/usr/share"], ["registry.npmjs.org", "*.example.com:8443"])
 
 
-class ScanTest(unittest.TestCase):
-    def setUp(self):
-        self.home = _tmp_tree(self)
-        for d in ("p", "work/Library/repo", "a/b/deep"):
-            _touch(os.path.join(self.home, d, ".claudesandbox"))
-        _touch(os.path.join(self.home, "old", ".claudeprotected"))
-        for d in ("Library/app", "x/node_modules/pkg", "x/.git/y"):
-            _touch(os.path.join(self.home, d, ".claudesandbox"))
-        self.expected = {os.path.join(self.home, d) for d in ("p", "work/Library/repo", "a/b/deep", "old")}
-
-    def found(self, tools) -> set:
-        real_which = shutil.which
-        with mock.patch.dict(os.environ, {"HOME": self.home}), \
-                mock.patch("claude_secure_sandbox.scan.shutil.which",
-                           side_effect=lambda t: real_which(t) if t in tools else None):
-            return {os.path.dirname(f) for f in find_sandbox_files(self.home, one_file_system=True)}
-
-    def test_every_tool_finds_them(self):
-        for tools in (("fd", "fdfind"), ("rg",), ()):
-            if tools and not any(shutil.which(t) for t in tools):
-                continue
-            with self.subTest(tools=tools):
-                found = self.found(tools)
-                # A repository in a directory named Library is found: only
-                # ~/Library may be skipped, and only by fd.
-                self.assertTrue(self.expected <= found, found)
-                self.assertFalse({f for f in found if "/node_modules/" in f or "/.git/" in f})
-
-    def test_known_repositories_and_state(self):
-        state_root = os.path.join(self.home, "state")
-        elsewhere = os.path.join(_tmp_tree(self), "remote-mount")
-        _touch(os.path.join(elsewhere, ".claudesandbox"))
-        no_longer = os.path.join(self.home, "unprotected")
-        os.makedirs(no_longer)
-        _touch(os.path.join(state_root, "r1", "state", "repository"), elsewhere + "\n")
-        _touch(os.path.join(state_root, "r2", "state", "repository"), no_longer + "\n")
-        # The wrapper's copies hold a .claudesandbox too.
-        _touch(os.path.join(state_root, "r1", "work", ".claudesandbox"))
-        with mock.patch.dict(os.environ, {"HOME": self.home}):
-            repos = protected_repositories(state_root, [self.home])
-        self.assertIn(elsewhere, repos)
-        self.assertNotIn(no_longer, repos)
-        self.assertFalse([r for r in repos if path_within(state_root, r)])
-        self.assertTrue(self.expected <= set(repos))
-
-
 class SecretsTest(unittest.TestCase):
     def test_protected_code_first(self):
         ctx = SimpleNamespace(protected_elsewhere=["/p1", "/p2"], protected=True, dev_root="/dev",
                               dev_git_common="/dev/.git", state_root="/state")
         self.assertEqual(secrets(ctx)[:4], ["/p1", "/p2", "/dev", "/dev/.git"])
+
+
+class PathToolsTest(unittest.TestCase):
+    def test_path_tools(self):
+        tmp = _tmp_tree(self)
+        home, root = os.path.join(tmp, "home"), os.path.join(tmp, "tool")
+        node = os.path.join(home, ".nvm", "versions", "node", "v22")
+        for d in (os.path.join(node, "bin"), os.path.join(home, "scripts"), os.path.join(home, ".ssh", "bin"),
+                  os.path.join(root, "bin"), os.path.join(root, "libexec")):
+            os.makedirs(d)
+        ctx = SimpleNamespace(root=root, run_dir=os.path.join(tmp, "run"), state_root=os.path.join(tmp, "state"),
+                              protected_elsewhere=[], protected=False)
+        path = [f"{node}/bin", os.path.join(home, "scripts"), home, tmp, "/usr/bin", f"{home}/.ssh/bin",
+                f"{root}/bin", f"{root}/libexec", f"{home}/missing/bin", "relative/bin"]
+        # The test tree lies in a temp directory, itself never readable.
+        with mock.patch.dict(os.environ, {"HOME": home, "PATH": ":".join(path)}), \
+                mock.patch("claude_secure_sandbox.access.TEMP_DIRS", []), \
+                mock.patch("claude_secure_sandbox.access.user_temp_dirs", return_value=[]):
+            # A bin directory comes with its installation (~/.nvm/versions/node/v22,
+            # /usr); never the home directory or above, a secret, the wrapper's own
+            # directories, a missing or relative one.
+            self.assertEqual(path_tools(ctx), [node, os.path.join(home, "scripts"), "/usr"])
+
+
+# --- srt rules and environment -------------------------------------------------
 
 
 class SandboxRulesTest(unittest.TestCase):
@@ -608,6 +558,84 @@ class SandboxRulesTest(unittest.TestCase):
         self.assertEqual(env["CLAUDE_CONFIG_DIR"], ctx.claude_home)
 
 
+class SeccompTest(unittest.TestCase):
+    def test_missing_helper_refused_on_linux(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        srt = os.path.join(root, "node_modules", ".bin", "srt")
+        with mock.patch.object(platform, "system", return_value="Linux"):
+            with mock.patch.object(platform, "machine", return_value="riscv64"), \
+                    mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+                check_seccomp(srt)
+            with mock.patch.object(platform, "machine", return_value="x86_64"):
+                if os.path.exists(srt):
+                    check_seccomp(srt)
+
+
+# --- machine scan --------------------------------------------------------------
+
+
+class ScanTest(unittest.TestCase):
+    def setUp(self):
+        self.home = _tmp_tree(self)
+        for d in ("p", "work/Library/repo", "a/b/deep"):
+            _touch(os.path.join(self.home, d, ".claudesandbox"))
+        _touch(os.path.join(self.home, "old", ".claudeprotected"))
+        for d in ("Library/app", "x/node_modules/pkg", "x/.git/y"):
+            _touch(os.path.join(self.home, d, ".claudesandbox"))
+        self.expected = {os.path.join(self.home, d) for d in ("p", "work/Library/repo", "a/b/deep", "old")}
+
+    def found(self, tools) -> set:
+        real_which = shutil.which
+        with mock.patch.dict(os.environ, {"HOME": self.home}), \
+                mock.patch("claude_secure_sandbox.scan.shutil.which",
+                           side_effect=lambda t: real_which(t) if t in tools else None):
+            return {os.path.dirname(f) for f in find_sandbox_files(self.home, one_file_system=True)}
+
+    def test_every_tool_finds_them(self):
+        for tools in (("fd", "fdfind"), ("rg",), ()):
+            if tools and not any(shutil.which(t) for t in tools):
+                continue
+            with self.subTest(tools=tools):
+                found = self.found(tools)
+                # A repository in a directory named Library is found: only
+                # ~/Library may be skipped, and only by fd.
+                self.assertTrue(self.expected <= found, found)
+                self.assertFalse({f for f in found if "/node_modules/" in f or "/.git/" in f})
+
+    def test_known_repositories_and_state(self):
+        state_root = os.path.join(self.home, "state")
+        elsewhere = os.path.join(_tmp_tree(self), "remote-mount")
+        _touch(os.path.join(elsewhere, ".claudesandbox"))
+        no_longer = os.path.join(self.home, "unprotected")
+        os.makedirs(no_longer)
+        _touch(os.path.join(state_root, "r1", "state", "repository"), elsewhere + "\n")
+        _touch(os.path.join(state_root, "r2", "state", "repository"), no_longer + "\n")
+        # The wrapper's copies hold a .claudesandbox too.
+        _touch(os.path.join(state_root, "r1", "work", ".claudesandbox"))
+        with mock.patch.dict(os.environ, {"HOME": self.home}):
+            repos = protected_repositories(state_root, [self.home])
+        self.assertIn(elsewhere, repos)
+        self.assertNotIn(no_longer, repos)
+        self.assertFalse([r for r in repos if path_within(state_root, r)])
+        self.assertTrue(self.expected <= set(repos))
+
+
+# --- paths and files -----------------------------------------------------------
+
+
+class PathTest(unittest.TestCase):
+    def test_path_within(self):
+        self.assertTrue(path_within("/a/b", "/a/b"))
+        self.assertTrue(path_within("/a/b", "/a/b/c"))
+        self.assertFalse(path_within("/a/b", "/a/bc"))
+        self.assertFalse(path_within("/a/b/c", "/a/b"))
+
+    def test_overlaps(self):
+        self.assertTrue(overlaps("/a", "/a/b"))
+        self.assertTrue(overlaps("/a/b", "/a"))
+        self.assertFalse(overlaps("/a/b", "/a/bc"))
+
+
 class LinkSafetyTest(unittest.TestCase):
     """The wrapper writes where Claude can plant links: it never follows them."""
 
@@ -641,11 +669,6 @@ class LinkSafetyTest(unittest.TestCase):
             ensure_real_dir(path)
         self.assertTrue(os.path.isdir(path) and not os.path.islink(path))
         self.assertTrue(os.path.isdir(elsewhere))
-
-    def test_overlaps(self):
-        self.assertTrue(overlaps("/a", "/a/b"))
-        self.assertTrue(overlaps("/a/b", "/a"))
-        self.assertFalse(overlaps("/a/b", "/a/bc"))
 
 
 if __name__ == "__main__":

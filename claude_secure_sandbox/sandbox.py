@@ -18,7 +18,7 @@ from .claude_config import PRIVATE_CLAUDE_ITEMS, claude_settings
 from .common import (NAME, PLACEHOLDER_TEXT, SANDBOX_FILE, die, ensure_real_dir, log, overlaps, path_within,
                      read_text, realpath, stamp, volume_roots, warn, write_text)
 from .context import Context
-from .screen import confirm_session, protected_code_exists
+from .screen import confirm_session
 
 # Paths of the copy's .git that Claude must not write: the wrapper's git or
 # the developer's would read configuration, hooks or objects from there.
@@ -152,7 +152,7 @@ def _read_rules(ctx: Context) -> Tuple[List[str], List[str]]:
     deny += [os.path.join(home, ".claude", item) for item in PRIVATE_CLAUDE_ITEMS]
     if ctx.protected:
         deny += [ctx.dev_root, ctx.dev_git_common]
-    if not ctx.home_session or protected_code_exists(ctx):
+    if not ctx.home_session or ctx.protected_code_exists:
         deny += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + user_temp_dirs()
     if not ctx.home_session:
         deny += [home] + USER_AREAS.get(platform.system(), []) + volume_roots()
@@ -242,7 +242,7 @@ def own_terminal() -> str:
     return os.ttyname(0)
 
 
-# --- the copy's .git on Linux ----------------------------------------------------
+# --- the copy's .git on Linux --------------------------------------------------
 
 
 def git_files_present(ctx: Context) -> List[str]:

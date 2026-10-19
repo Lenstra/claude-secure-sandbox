@@ -18,7 +18,14 @@ from .screen import session_label
 
 # Items of ~/.claude passed through, read only.
 SYNC = ["settings.json", "CLAUDE.md", "agents", "commands", "skills", "plugins"]
-
+# Entries of ~/.claude/plugins that Claude Code rewrites itself when it syncs
+# the plugins of claude.ai: the sandbox keeps its own copy of them.
+OWN_PLUGIN_ITEMS = {"synced", "store"}
+# The onboarding already done outside (theme, login method), so that Claude
+# Code does not start over in the sandbox.
+ONBOARDING_KEYS = ("hasCompletedOnboarding", "lastOnboardingVersion", "theme")
+# Claude Code's login on macOS, in the user's keychain.
+KEYCHAIN_SERVICE = "Claude Code-credentials"
 
 # Items of ~/.claude that hold transcripts, history or credentials: hidden
 # from the sandbox.
@@ -27,13 +34,19 @@ PRIVATE_CLAUDE_ITEMS = {"projects", "file-history", "history.jsonl", "todos", "s
 
 
 def sync_claude_config(ctx: Context) -> None:
-    """Passes the configuration items of ~/.claude through to the sandbox's
-    configuration directory, read only: each one is a link to the original,
-    whose real path becomes readable (ctx.config_read). Nothing in ~/.claude
-    is writable from the sandbox, and transcripts stay unreadable."""
-    src = os.path.join(os.environ["HOME"], ".claude")
-    dst = ctx.claude_home
-    ensure_real_dir(dst)
+    """The sandbox's Claude configuration: the developer's, read only, and
+    the parts of ~/.claude.json the session needs."""
+    ensure_real_dir(ctx.claude_home)
+    _link_config_items(ctx)
+    _copy_claude_json(ctx)
+
+
+def _link_config_items(ctx: Context) -> None:
+    """Each SYNC item of ~/.claude becomes a link to the original, whose real
+    path becomes readable (ctx.config_read): nothing in ~/.claude is writable
+    from the sandbox, and transcripts stay unreadable. An item that leads to
+    a sensitive place is left out."""
+    src, dst = os.path.join(os.environ["HOME"], ".claude"), ctx.claude_home
     sensitive = [ctx.state_root, os.path.join(os.environ["HOME"], ".ssh")]
     if ctx.protected:
         sensitive += [ctx.dev_root, ctx.dev_git_common]
@@ -60,41 +73,37 @@ def sync_claude_config(ctx: Context) -> None:
             ctx.config_read.append(real)
         except OSError:
             warn(f"cannot pass ~/.claude/{item} through")
-    # MCP servers of ~/.claude.json, copied into the sandbox's .claude.json:
-    # the global ones, and those of this repository (claude mcp add, local
-    # scope), attached to the directory Claude works in, with the trust given
-    # to this repository. The onboarding (theme, login) done outside too:
-    # without it, Claude Code starts over in the sandbox. The rest of that file
-    # is Claude Code's state (account, every project's paths and sessions),
-    # rewritten constantly, so it is neither passed through nor copied. The
-    # sandbox's .claude.json is only read when it is a regular file (not a
-    # link Claude planted).
+
+
+def _copy_claude_json(ctx: Context) -> None:
+    """~/.claude.json is Claude Code's state (account, every project's paths
+    and sessions), rewritten constantly: neither passed through nor copied.
+    Only these parts go into the sandbox's own .claude.json: the global MCP
+    servers, this repository's (claude mcp add, local scope) and its trust,
+    attached to the directory Claude works in, and the onboarding."""
     home_json = os.path.join(os.environ["HOME"], ".claude.json")
     source = load_json(home_json) if os.path.isfile(home_json) else None
-    if isinstance(source, dict):
-        target = os.path.join(dst, ".claude.json")
-        current = load_json(target) if regular_file(target) else None
-        data = current if isinstance(current, dict) else {}
-        data["mcpServers"] = source.get("mcpServers") or {}
-        for key in ONBOARDING_KEYS:
-            if key in source:
-                data[key] = source[key]
-        projects = source.get("projects") if isinstance(source.get("projects"), dict) else {}
-        mine = projects.get(ctx.dev_root) if isinstance(projects.get(ctx.dev_root), dict) else {}
-        if not isinstance(data.get("projects"), dict):
-            data["projects"] = {}
-        entry = data["projects"].get(ctx.work)
-        entry = entry if isinstance(entry, dict) else {}
-        entry["mcpServers"] = mine.get("mcpServers") or {}
-        if mine.get("hasTrustDialogAccepted") is True:
-            entry["hasTrustDialogAccepted"] = True
-        data["projects"][ctx.work] = entry
-        install_json(data, target, ctx.wtmp)
-
-
-# Entries of ~/.claude/plugins that Claude Code rewrites itself when it syncs
-# the plugins of claude.ai: the sandbox keeps its own copy of them.
-OWN_PLUGIN_ITEMS = {"synced", "store"}
+    if not isinstance(source, dict):
+        return
+    target = os.path.join(ctx.claude_home, ".claude.json")
+    # Read only when it is a regular file, never a link Claude planted.
+    current = load_json(target) if regular_file(target) else None
+    data = current if isinstance(current, dict) else {}
+    data["mcpServers"] = source.get("mcpServers") or {}
+    for key in ONBOARDING_KEYS:
+        if key in source:
+            data[key] = source[key]
+    projects = source.get("projects") if isinstance(source.get("projects"), dict) else {}
+    mine = projects.get(ctx.dev_root) if isinstance(projects.get(ctx.dev_root), dict) else {}
+    if not isinstance(data.get("projects"), dict):
+        data["projects"] = {}
+    entry = data["projects"].get(ctx.work)
+    entry = entry if isinstance(entry, dict) else {}
+    entry["mcpServers"] = mine.get("mcpServers") or {}
+    if mine.get("hasTrustDialogAccepted") is True:
+        entry["hasTrustDialogAccepted"] = True
+    data["projects"][ctx.work] = entry
+    install_json(data, target, ctx.wtmp)
 
 
 def pass_plugins_through(source: str, target: str) -> None:
@@ -120,13 +129,6 @@ def pass_plugins_through(source: str, target: str) -> None:
                 shutil.copytree(original, entry, symlinks=True)
             else:
                 shutil.copy2(original, entry, follow_symlinks=False)
-
-
-ONBOARDING_KEYS = ("hasCompletedOnboarding", "lastOnboardingVersion", "theme")
-
-
-# Claude Code's login on macOS, in the user's keychain.
-KEYCHAIN_SERVICE = "Claude Code-credentials"
 
 
 def _expires_at(data) -> int:

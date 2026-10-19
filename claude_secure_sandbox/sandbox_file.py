@@ -143,7 +143,7 @@ def normalize_domain(line: str) -> str:
     return domain
 
 
-# --- what Claude sees in a protected repository ---------------------------------
+# --- what Claude sees in a protected repository --------------------------------
 
 
 def is_visible(visible: List[str], rel: str) -> bool:

@@ -30,7 +30,6 @@ class Context:
         self.hidden: List[str] = []
         self.hidden_dirs: List[str] = []
         self.visible_hash = ""
-        self.placeholder = ""
         self.spec = ""
         self.fresh_copy = False
         # Protected repositories other than the session's, entirely hidden.
@@ -46,6 +45,11 @@ class Context:
         # srt's own temp directory, private to the session (sandbox.make_srt_tmp).
         self.srt_tmp = ""
         self.lock: Optional[Lock] = None
+
+    @property
+    def protected_code_exists(self) -> bool:
+        """This repository is protected, or another one on the computer."""
+        return self.protected or bool(self.protected_elsewhere)
 
     @property
     def git_dev(self) -> Git:

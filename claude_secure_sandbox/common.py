@@ -160,7 +160,6 @@ def install_json(data, dst: str, tmp_dir: str) -> None:
 
 
 def write_lines(path: str, lines: Iterable[str]) -> None:
-    lines = list(lines)
     write_text(path, "".join(line + "\n" for line in lines))
 
 

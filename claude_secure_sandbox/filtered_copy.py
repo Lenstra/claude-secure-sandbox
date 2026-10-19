@@ -22,6 +22,9 @@ _FILE_MODES = ("100644", "100755", "120000")
 INCOMING = "refs/incoming"
 
 
+# --- fetch from the developer's repository -------------------------------------
+
+
 def dev_export_refs(ctx: Context) -> List[Tuple[str, str]]:
     """(sha, target refname) for the developer refs exported to the copy:
     branches, tags that point to a commit, and HEAD."""
@@ -63,11 +66,6 @@ def write_spec(ctx: Context) -> str:
     return proc.stdout.strip()
 
 
-def _hash_placeholder(ctx: Context, write: bool) -> str:
-    args = ["hash-object", "--stdin"] + (["-w"] if write else [])
-    return ctx.git_copy.out(*args, input=PLACEHOLDER_TEXT + "\n")
-
-
 def init_copy(ctx: Context) -> None:
     shutil.rmtree(ctx.work, ignore_errors=True)
     os.makedirs(ctx.work)
@@ -99,7 +97,6 @@ def init_copy(ctx: Context) -> None:
     write_text(os.path.join(ctx.copy_git, "info", "sparse-checkout"), "/*\n")
     for f in ("host-tips", "hidden-blobs", "hidden-paths"):
         write_text(ctx.state_file(f), "")
-    ctx.placeholder = _hash_placeholder(ctx, write=True)
 
 
 def fetch_from_dev(ctx: Context) -> List[str]:
@@ -122,6 +119,9 @@ def fetch_from_dev(ctx: Context) -> List[str]:
     if stale:
         ctx.git_copy.out("update-ref", "--stdin", input="".join(f"delete {r}\n" for r in stale))
     return tips
+
+
+# --- hidden content: fingerprints, removal, placeholders -----------------------
 
 
 def _log_hidden_paths(ctx: Context, revs: List[str]) -> str:
@@ -221,6 +221,25 @@ def remove_hidden_blobs(ctx: Context) -> bool:
     return not (present_blobs(ctx) & hidden)
 
 
+def install_placeholders(ctx: Context, new: Set[str]) -> None:
+    """Creates the replace refs that show the placeholder instead of hidden
+    contents. If Claude deleted some, all of them are recreated."""
+    placeholder = ctx.git_copy.out("hash-object", "-w", "--stdin", input=PLACEHOLDER_TEXT + "\n")
+    known = read_lines(ctx.state_file("hidden-blobs"))
+    have = len(ctx.git_copy.out("for-each-ref", "--format=x", "refs/replace").splitlines())
+    targets = known if have < len(known) else sorted(new)
+    updates = "".join(f"update refs/replace/{oid} {placeholder}\n" for oid in targets if oid != placeholder)
+    try:
+        if updates:
+            ctx.git_copy.out("update-ref", "--stdin", input=updates)
+        ctx.git_copy.out("pack-refs", "--all")
+    except GitError:
+        die("cannot create placeholders")
+
+
+# --- integrity of the copy's .git ----------------------------------------------
+
+
 def _links_in(path: str) -> bool:
     """True if path contains a symbolic link, or a file with several hard links."""
     for dirpath, dirnames, filenames in os.walk(path):
@@ -248,21 +267,7 @@ def check_copy_integrity(ctx: Context) -> bool:
             and ctx.git_copy.value("config", "--get", "extensions.partialClone") == "host")
 
 
-def install_placeholders(ctx: Context, new: Set[str]) -> None:
-    """Creates the replace refs that show the placeholder instead of hidden
-    contents. If Claude deleted some, all of them are recreated."""
-    ctx.placeholder = _hash_placeholder(ctx, write=True)
-    known = read_lines(ctx.state_file("hidden-blobs"))
-    have = len(ctx.git_copy.out("for-each-ref", "--format=x", "refs/replace").splitlines())
-    targets = known if have < len(known) else sorted(new)
-    updates = "".join(f"update refs/replace/{oid} {ctx.placeholder}\n"
-                      for oid in targets if oid != ctx.placeholder)
-    try:
-        if updates:
-            ctx.git_copy.out("update-ref", "--stdin", input=updates)
-        ctx.git_copy.out("pack-refs", "--all")
-    except GitError:
-        die("cannot create placeholders")
+# --- update, rebuild and archive -----------------------------------------------
 
 
 def prepare_copy(ctx: Context) -> None:
@@ -308,26 +313,6 @@ def prepare_copy(ctx: Context) -> None:
     die("cannot get a copy free of hidden content; session cancelled")
 
 
-def claude_project_dir(ctx: Context) -> str:
-    """Claude Code's session directory for the copy."""
-    encoded = "".join(c if c.isascii() and c.isalnum() else "-" for c in ctx.work)
-    return os.path.join(ctx.claude_home, "projects", encoded)
-
-
-def claude_branches(ctx: Context) -> List[str]:
-    """Branches of the copy holding commits the developer does not have."""
-    result = []
-    listing = ctx.git_copy.value("for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads")
-    for line in listing.splitlines():
-        tip, _, branch = line.partition(" ")
-        try:
-            if new_commits(ctx, tip):
-                result.append(branch)
-        except GitError:
-            result.append(branch)
-    return result
-
-
 def archive_copy(ctx: Context, reason: str) -> None:
     """Moves the copy and this repository's sessions out of the sandbox's reach."""
     dest = os.path.join(ctx.archive, f"{stamp()}-{reason}")
@@ -356,6 +341,38 @@ def archive_copy(ctx: Context, reason: str) -> None:
     log(f"previous copy and sessions archived in {dest}")
     for branch in branches:
         log(f"  Claude's {branch} is still there: git fetch {dest}/work {branch}")
+
+
+def claude_project_dir(ctx: Context) -> str:
+    """Claude Code's session directory for the copy."""
+    encoded = "".join(c if c.isascii() and c.isalnum() else "-" for c in ctx.work)
+    return os.path.join(ctx.claude_home, "projects", encoded)
+
+
+def claude_branches(ctx: Context) -> List[str]:
+    """Branches of the copy holding commits the developer does not have."""
+    result = []
+    listing = ctx.git_copy.value("for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads")
+    for line in listing.splitlines():
+        tip, _, branch = line.partition(" ")
+        try:
+            if new_commits(ctx, tip):
+                result.append(branch)
+        except GitError:
+            result.append(branch)
+    return result
+
+
+def new_commits(ctx: Context, tip: str) -> List[str]:
+    """Commits reachable from tip but not from any commit known to the
+    developer, oldest first. Raises GitError."""
+    revs = [tip] + ["^" + t for t in read_lines(ctx.state_file("host-tips"))]
+    # A developer commit may be gone from the copy (git gc run by Claude).
+    return ctx.git_copy.out("rev-list", "--topo-order", "--reverse", "--ignore-missing", "--stdin",
+                            input="".join(r + "\n" for r in revs)).split()
+
+
+# --- checkout ------------------------------------------------------------------
 
 
 def write_sparse_patterns(ctx: Context, commit: str) -> List[str]:
@@ -397,12 +414,3 @@ def report_absent_public_files(ctx: Context, paths: List[str]) -> None:
         log("visible files absent from the copy, because a hidden file has the same content:"
             + "".join(f"\n  {p}" for p in shown))
         write_lines(ctx.state_file("reported-absent"), sorted(reported | set(new)))
-
-
-def new_commits(ctx: Context, tip: str) -> List[str]:
-    """Commits reachable from tip but not from any commit known to the
-    developer, oldest first. Raises GitError."""
-    revs = [tip] + ["^" + t for t in read_lines(ctx.state_file("host-tips"))]
-    # A developer commit may be gone from the copy (git gc run by Claude).
-    return ctx.git_copy.out("rev-list", "--topo-order", "--reverse", "--ignore-missing", "--stdin",
-                            input="".join(r + "\n" for r in revs)).split()

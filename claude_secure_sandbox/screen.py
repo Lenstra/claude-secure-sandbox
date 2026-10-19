@@ -10,12 +10,6 @@ from .common import NAME, SANDBOX_FILE, path_within
 from .context import Context
 
 
-def protected_code_exists(ctx: Context) -> bool:
-    """True when protected code exists on the computer: this repository, or
-    another protected repository."""
-    return ctx.protected or bool(ctx.protected_elsewhere)
-
-
 def session_label(ctx: Context) -> str:
     if not ctx.protected:
         name = ctx.work if ctx.home_session else os.path.basename(ctx.work)
@@ -66,7 +60,7 @@ def confirm_session(ctx: Context) -> bool:
         lines.append("Claude can read:     the rest of your computer, except what follows")
         if others:
             lines.append(f"Protected, hidden:   {others_text}")
-        if protected_code_exists(ctx):
+        if ctx.protected_code_exists:
             lines.append("Also hidden:         your credentials (SSH keys, keychain, tokens), temp files,")
             lines.append("                     and your old Claude conversations")
         else:
