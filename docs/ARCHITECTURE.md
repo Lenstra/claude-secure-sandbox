@@ -149,7 +149,7 @@ Every other protected repository of the computer is hidden entirely, not readabl
 
 ## 5. The `.claudesandbox` file
 
-Its presence at the repository root protects the repository. It is committed, and has three sections:
+Its presence at the repository root protects the repository. Protection rests on git: Claude only ever gets committed content, filtered by this file. What git does not track (untracked and ignored files, uncommitted changes) never reaches the copy, even under a listed path, and a directory outside git cannot be protected. The file is committed, and has three sections:
 
 ```
 # .claudesandbox
@@ -605,7 +605,7 @@ flowchart LR
 
 - No build or test of what depends on protected code until the execution MCP exists (section 12); changes to protected code are made by hand.
 - Dependencies (`node_modules`, build outputs) must be installed in the copy, from the registries allowed in `[allowed-domain]`.
-- Claude does not see the developer's uncommitted work, nor commits made during the session.
+- Claude does not see what git does not track (untracked and ignored files such as `.env` or `node_modules`), the developer's uncommitted work, nor commits made during the session.
 - Literal paths only in `.claudesandbox`, no patterns.
 - Windows, submodules and git worktrees are not supported in v1.
 - Protected repositories are found by a scan of the local disks at each launch (about 6 s). One on a disk or mount the scan does not reach (a network mount) is hidden only if the wrapper was used in it before.

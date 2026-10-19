@@ -145,9 +145,11 @@ package.json
 registry.npmjs.org
 ```
 
-- **`[allowed-git]`**: the only paths Claude may see in the repository. Everything else is hidden, including what you add later. Paths are relative to the root; a directory shows everything below it. Literal paths only: no `*`, `?`, `[` or `!`. `.` shows the whole repository; an empty file hides all of it. Without the file, nothing is hidden: Claude works directly in your folder.
+- **`[allowed-git]`**: the only paths Claude may see in the repository, as committed. Everything else is hidden, including what you add later. Paths are relative to the root; a directory shows everything below it. Literal paths only: no `*`, `?`, `[` or `!`. `.` shows the whole repository; an empty file hides all of it. Without the file, nothing is hidden: Claude works directly in your folder.
 - **`[allowed-external]`**: what Claude may read outside the repository, such as an SDK or a package cache. Absolute or `~/...`, read only.
 - **`[allowed-domain]`**: the network domains Claude may reach beyond Claude's own API and login, such as a package registry. The claude.ai connectors (`mcp-proxy.anthropic.com`) are closed by default: a GitHub connector would read your protected code on GitHub.
+
+Protection rests on git: Claude only ever gets what is committed. Files git does not track never reach it, even under a listed path: untracked and ignored files (`.env`, `node_modules`, build outputs) and uncommitted changes. Claude installs dependencies itself in its copy, from a registry listed under `[allowed-domain]`. A folder that is not a git repository cannot be protected: `git init`, then commit what Claude may see.
 - Lines starting with `#` are comments. A `#` after an entry is part of it: put comments on their own line.
 
 Every section is an allowlist: what is not listed stays closed. The first time an entry appears, the wrapper asks you before Claude starts:
