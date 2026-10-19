@@ -25,7 +25,7 @@ from claude_secure_sandbox.filtered_copy import parse_raw_log  # noqa: E402
 from claude_secure_sandbox.sandbox_file import (Grants, SandboxFile, confirm_access,  # noqa: E402
                                                 confirm_visible, hidden_roots, is_visible, leads_to_visible,
                                                 normalize_domain, normalize_visible, sparse_escape)
-from claude_secure_sandbox.scan import protected_on_a_branch, protected_repositories, scan  # noqa: E402
+from claude_secure_sandbox.scan import protected_repositories  # noqa: E402
 from claude_secure_sandbox.screen import Progress, estimate  # noqa: E402
 
 
@@ -351,26 +351,13 @@ class EverProtectedTest(unittest.TestCase):
         git("commit", "-qm", "protected")
         git("checkout", "-q", "-b", "old", "HEAD~1")
         self.assertFalse(os.path.exists(os.path.join(repo, ".claudesandbox")))
-        self.assertTrue(ever_protected(git_dev(repo)))
-
-    def test_scan_keeps_a_protected_repository_without_its_file(self):
-        root = _tmp_tree(self)
-        repo, state_root = os.path.join(root, "repo"), os.path.join(root, "state")
-        os.makedirs(repo)
-        state = os.path.join(state_root, "repo-1", "state")
-        _touch(os.path.join(state, "repository"), repo + "\n")
-        self.assertEqual(protected_repositories(state_root, []), [])
-        Grants(state).set("protected", [""])
-        self.assertEqual(protected_repositories(state_root, []), [repo])
-
-    def test_confirmation_marks_it(self):
-        state = _tmp_tree(self)
-        _Answers(self, "y", "y")
-        confirm_visible(state, _on_disk("[allowed-git]\nsrc\n"), False)
-        self.assertEqual(Grants(state).get("protected"), [""])
-        confirm_visible(state, SandboxFile(), True)
-        self.assertEqual(Grants(state).get("protected"), [])
-        self.assertEqual(Grants(state).get("unprotected"), [""])
+        self.assertTrue(ever_protected(repo))
+        # Removed from every branch since: still in the history.
+        git("checkout", "-q", "main")
+        git("rm", "-q", ".claudesandbox")
+        git("commit", "-qm", "unprotected")
+        git("branch", "-q", "-D", "old")
+        self.assertTrue(ever_protected(repo))
 
 
 class ConfirmAccessTest(unittest.TestCase):
@@ -723,7 +710,7 @@ class ScanTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"HOME": self.home}), \
                 mock.patch("claude_secure_sandbox.scan.shutil.which",
                            side_effect=lambda t: real_which(t) if t in tools else None):
-            return set(scan(os.path.join(self.home, "state"), [self.home]))
+            return set(protected_repositories(os.path.join(self.home, "state"), [self.home]))
 
     def test_every_tool_finds_them(self):
         for tools in (("fd", "fdfind"), ()):
@@ -736,27 +723,25 @@ class ScanTest(unittest.TestCase):
                 # Only fd skips ~/Library, for speed.
                 self.assertEqual(found - {os.path.join(self.home, "Library", "app")}, self.expected)
 
-    def test_protected_on_a_branch(self):
-        self.assertTrue(protected_on_a_branch(os.path.join(self.home, "branchy")))
-        self.assertFalse(protected_on_a_branch(os.path.join(self.home, "plain")))
-        self.assertFalse(protected_on_a_branch(os.path.join(self.home, "x")))
+    def test_ever_protected(self):
+        from claude_secure_sandbox.sandbox_file import ever_protected
+        self.assertTrue(ever_protected(os.path.join(self.home, "branchy")))
+        self.assertFalse(ever_protected(os.path.join(self.home, "plain")))
+        self.assertFalse(ever_protected(os.path.join(self.home, "x")))
 
-    def test_known_repositories_and_state(self):
+    def test_state_is_never_read(self):
+        # A repository the wrapper knew, elsewhere: only the scan decides.
         state_root = os.path.join(self.home, "state")
         elsewhere = os.path.join(_tmp_tree(self), "remote-mount")
         _touch(os.path.join(elsewhere, ".claudesandbox"))
-        no_longer = os.path.join(self.home, "unprotected")
-        os.makedirs(no_longer)
         _touch(os.path.join(state_root, "r1", "state", "repository"), elsewhere + "\n")
-        _touch(os.path.join(state_root, "r2", "state", "repository"), no_longer + "\n")
+        _touch(os.path.join(state_root, "r1", "state", "granted"), "protected\n")
         # The wrapper's copies hold a .claudesandbox too.
         _touch(os.path.join(state_root, "r1", "work", ".claudesandbox"))
         with mock.patch.dict(os.environ, {"HOME": self.home}):
             repos = protected_repositories(state_root, [self.home])
-        self.assertIn(elsewhere, repos)
-        self.assertNotIn(no_longer, repos)
+        self.assertNotIn(elsewhere, repos)
         self.assertFalse([r for r in repos if path_within(state_root, r)])
-        self.assertTrue(self.expected <= set(repos))
 
 
 # --- what the developer sees ----------------------------------------------------

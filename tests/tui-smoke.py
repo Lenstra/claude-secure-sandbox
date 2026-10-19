@@ -38,7 +38,7 @@ def run(base: str) -> int:
     home, work = os.path.join(base, "home"), os.path.join(base, "work")
     os.makedirs(home)
     os.makedirs(work)
-    env = dict(os.environ, HOME=home, TERM="xterm-256color", CLAUDE_SECURE_SANDBOX_SCAN="limited",
+    env = dict(os.environ, HOME=home, TERM="xterm-256color", CLAUDE_SECURE_SANDBOX_SCAN_ROOT=home,
                CLAUDE_SECURE_SANDBOX_HOME=os.path.join(home, ".cache", "claude-secure-sandbox"))
     for var in ("CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE", "CLAUDE_SECURE_SANDBOX_ACTIVE"):
         env.pop(var, None)

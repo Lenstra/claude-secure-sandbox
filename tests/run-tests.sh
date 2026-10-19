@@ -66,7 +66,8 @@ export GIT_CONFIG_GLOBAL=$T/home/.gitconfig
 export GIT_CONFIG_NOSYSTEM=1
 export CLAUDE_SECURE_SANDBOX_HOME=$T/home/.cache/claude-secure-sandbox
 # Scan only the home directory and the session's directory, not the computer.
-export CLAUDE_SECURE_SANDBOX_SCAN=limited
+# The machine scan covers the test tree only; it is tested on its own.
+export CLAUDE_SECURE_SANDBOX_SCAN_ROOT=$T
 export CS_TEST_SECRET_JSON=$T/secret.json
 export CS_TEST_PLACEHOLDER=$PLACEHOLDER
 export CS_TEST_EXPECTED=$T/fakebin/expected-head
@@ -676,7 +677,7 @@ check "no Claude Code settings written in the directory" sh -c "test ! -e '$F/.c
 ( cd "$F" && sleep 3 | claude_in_terminal ) > "$T/out/screen" 2>&1
 check "unprotected screen: the other files are hidden" grep -q "not your other files" "$T/out/screen"
 mkdir -p "$T/home/never-opened" && echo "core" > "$T/home/never-opened/.claudeprotected"
-python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from claude_secure_sandbox.scan import scan; print("\n".join(scan(sys.argv[2], [sys.argv[3]])))' \
+python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from claude_secure_sandbox.scan import protected_repositories as p; print("\n".join(p(sys.argv[2], [sys.argv[3]])))' \
   "$ROOT" "$STATE_ROOT" "$T" > "$T/out/scan"
 check "machine scan finds the protected repositories" sh -c "grep -qx '$D' '$T/out/scan' && grep -qx '$T/home/never-opened' '$T/out/scan'"
 check_not "machine scan skips the wrapper's copies" grep -q "$STATE_ROOT" "$T/out/scan"

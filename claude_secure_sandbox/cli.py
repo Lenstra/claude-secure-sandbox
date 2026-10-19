@@ -18,9 +18,9 @@ from typing import List, NoReturn
 
 from . import access, claude_config, filtered_copy, sandbox, scan, session
 from .common import (LEGACY_PROTECT_FILE, NAME, SANDBOX_FILE, Lock, check_deps, check_seccomp, die, find_real_claude,
-                     find_srt, fs_within, git_dev, git_env, path_within, realpath, state_root, volume_roots, warn)
+                     find_srt, fs_within, git_env, path_within, realpath, state_root, volume_roots, warn)
 from .context import Context
-from .sandbox_file import (Grants, confirm_access, confirm_visible, ever_protected, hidden_roots, is_visible,
+from .sandbox_file import (confirm_access, confirm_visible, ever_protected, hidden_roots, is_visible,
                            leads_to_visible, read_sandbox_file, visible_hash)
 from .scan import protects
 from .screen import Progress
@@ -91,14 +91,14 @@ def _ancestors(path: str) -> List[str]:
 
 def find_protected_elsewhere(ctx: Context, cwd: str, protected: bool) -> None:
     """Every other protected repository is hidden entirely: the whole computer
-    is scanned at each launch. CLAUDE_SECURE_SANDBOX_SCAN=limited (tests)
-    scans only the home directory and the session's directory. A session
+    is scanned at each launch. CLAUDE_SECURE_SANDBOX_SCAN_ROOT (tests) scans
+    only that directory and the session's. A session
     never works inside what it must not open: another protected repository
     (its .git, for instance), credentials, the developer's Claude data."""
     home = os.environ["HOME"]
-    if os.environ.get("CLAUDE_SECURE_SANDBOX_SCAN") == "limited":
-        roots = [home] if path_within(home, ctx.dev_root) else [home, ctx.dev_root]
-        repos = scan.protected_repositories(ctx.state_root, roots)
+    scan_root = os.environ.get("CLAUDE_SECURE_SANDBOX_SCAN_ROOT")
+    if scan_root:
+        repos = scan.protected_repositories(ctx.state_root, [scan_root, ctx.dev_root])
     else:
         with Progress("looking for protected repositories on this computer",
                       os.path.join(ctx.state_root, "scan-seconds")):
@@ -110,10 +110,9 @@ def find_protected_elsewhere(ctx: Context, cwd: str, protected: bool) -> None:
     ctx.protected_elsewhere = [r for r in repos if r != ctx.dev_root]
     # Inside a protected repository where git does not find its root (its
     # .git, a repository nested in it), the session would open it directly.
-    # A repository above that the scan did not report (protected only in
-    # its history, never opened with the wrapper) is checked on every branch.
+    # Every repository above, even one the scan could not reach.
     above = [d for d in _ancestors(cwd) if d != ctx.dev_root and os.path.lexists(os.path.join(d, ".git"))
-             and (protects(d) or ever_protected(git_dev(d)))]
+             and (protects(d) or ever_protected(d))]
     for repo in ctx.protected_elsewhere + above:
         if fs_within(repo, ctx.dev_root):
             die(f"{ctx.dev_root} lies inside the protected repository {repo}: run claude from {repo}")
@@ -200,7 +199,7 @@ def _main(root: str, args: List[str]) -> int:
     # A repository that was ever protected, on any branch, stays protected
     # until the developer confirms otherwise (confirm_visible), even with a
     # branch checked out that has no .claudesandbox.
-    was_protected = bool(toplevel) and (ever_protected(ctx.git_dev) or bool(Grants(ctx.state).get("protected")))
+    was_protected = bool(toplevel) and ever_protected(ctx.dev_root)
     protected = ctx.sandbox_file.exists or was_protected
 
     ctx.srt = find_srt(root) or die(f'srt not found: run "npm ci" in {root}')

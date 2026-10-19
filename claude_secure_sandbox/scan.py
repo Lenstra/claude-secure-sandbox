@@ -6,7 +6,6 @@ scan must be complete and current, so it runs before each session.
 
 from __future__ import annotations
 
-import glob
 import os
 import platform
 import shutil
@@ -14,9 +13,8 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
-from .common import (LEGACY_PROTECT_FILE, SANDBOX_FILE, die, git_env, path_within, read_lines, realpath,
-                     volume_roots)
-from .sandbox_file import Grants
+from .common import LEGACY_PROTECT_FILE, SANDBOX_FILE, die, path_within, realpath, volume_roots
+from .sandbox_file import ever_protected
 
 # macOS reaches the data volume through firmlinks; fd reports it under this prefix.
 MACOS_DATA = "/System/Volumes/Data"
@@ -27,8 +25,8 @@ LOCAL_FILESYSTEMS = {"ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "jfs
 
 def find_markers(root: str, one_file_system: bool = False, timeout: float = None) -> List[str]:
     """Under root: every .claudesandbox (and earlier .claudeprotected), a
-    file or a link, and every .git, whose repository may be protected on a
-    branch not checked out (fd, else find). Never inside .git or
+    file or a link, and every .git, whose repository may have been protected
+    on any branch (fd, else find). Never inside .git or
     node_modules, and with fd not in ~/Library when root is the home
     directory (only for speed). Stops the launch if the scan does not finish
     in time: a repository it did not reach would not be hidden."""
@@ -62,27 +60,6 @@ def find_markers(root: str, one_file_system: bool = False, timeout: float = None
     return found
 
 
-def protected_on_a_branch(repo: str) -> bool:
-    """True if a branch or tag of the repository, checked out or not, has a
-    .claudesandbox (or .claudeprotected) at its root. Only the tips are read,
-    which keeps it fast; a repository that does not answer in time counts
-    as protected."""
-    def git(*args: str, input: str = None) -> str:
-        return subprocess.run(["git", "-C", repo, "-c", "core.fsmonitor=false", *args], input=input,
-                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=git_env(),
-                              encoding="utf-8", errors="surrogateescape", timeout=30).stdout
-    try:
-        tips = sorted(set(git("for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes",
-                              "refs/tags").split()))
-        if not tips:
-            return False
-        out = git("cat-file", "--batch-check",
-                  input="".join(f"{tip}:{name}\n" for tip in tips for name in (SANDBOX_FILE, LEGACY_PROTECT_FILE)))
-    except subprocess.TimeoutExpired:
-        return True
-    return any(line.split(" ")[1:2] == ["blob"] for line in out.splitlines())
-
-
 def protects(directory: str) -> bool:
     """True if the directory is protected: it holds a .claudesandbox, or an
     earlier .claudeprotected."""
@@ -109,11 +86,12 @@ def scan_roots() -> List[str]:
     return roots
 
 
-def scan(state_root: str, roots: List[str]) -> List[str]:
-    """Protected repositories under roots, each scanned without leaving its
-    filesystem: those whose .claudesandbox is on disk, and those protected
-    on another branch. The wrapper's state is left out (its copies hold a
-    .claudesandbox too)."""
+def protected_repositories(state_root: str, roots: List[str]) -> List[str]:
+    """Every protected directory under roots, each scanned without leaving
+    its filesystem: one that holds a .claudesandbox, and every git
+    repository that ever committed one, on any branch. Read from the disk
+    and from git at each launch, never from the wrapper's state. The state
+    itself is left out (its copies hold a .claudesandbox too)."""
     files, repos, seen = set(), set(), set()
     for root in roots:
         real = realpath(root)
@@ -129,18 +107,5 @@ def scan(state_root: str, roots: List[str]) -> List[str]:
     found = {d for d in files if protects(d)}
     others = sorted(repos - found)
     with ThreadPoolExecutor(max_workers=8) as pool:
-        found |= {r for r, protected in zip(others, pool.map(protected_on_a_branch, others)) if protected}
-    return sorted(found)
-
-
-def protected_repositories(state_root: str, roots: List[str]) -> List[str]:
-    """Every protected repository: found under roots now, or used with the
-    wrapper before, which covers one where the scan cannot go, and one
-    protected with a branch checked out that has no .claudesandbox."""
-    found = set(scan(state_root, roots))
-    for marker in glob.glob(os.path.join(state_root, "*", "state", "repository")):
-        state = os.path.dirname(marker)
-        for repo in read_lines(marker):
-            if protects(repo) or (os.path.isdir(repo) and Grants(state).get("protected")):
-                found.add(repo)
+        found |= {r for r, protected in zip(others, pool.map(ever_protected, others)) if protected}
     return sorted(found)

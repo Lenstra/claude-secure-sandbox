@@ -90,7 +90,7 @@ jobs:
           printf '#!/bin/sh\necho CLAUDE-RAN\n' > "$RUNNER_TEMP/claude" && chmod +x "$RUNNER_TEMP/claude"
           mkdir -p "$RUNNER_TEMP/plain" && cd "$RUNNER_TEMP/plain"
           status=0
-          out=$(PATH="$GITHUB_WORKSPACE/bin:$RUNNER_TEMP:$PATH" CLAUDE_SECURE_SANDBOX_SCAN=limited claude 2>&1 < /dev/null) || status=$?
+          out=$(PATH="$GITHUB_WORKSPACE/bin:$RUNNER_TEMP:$PATH" CLAUDE_SECURE_SANDBOX_SCAN_ROOT="$RUNNER_TEMP" claude 2>&1 < /dev/null) || status=$?
           echo "$out"
           rm "$RUNNER_TEMP/claude"
           if echo "$out" | grep -q CLAUDE-RAN; then echo "Claude ran"; exit 1; fi
