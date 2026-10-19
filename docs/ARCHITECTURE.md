@@ -98,13 +98,16 @@ The wrapper is the only trusted component that touches both sides. Claude only e
 
 | | In Claude's copy |
 | --- | --- |
-| Paths under `[allowed-git]` | as in the developer's repository, at the current commit |
+| Paths under `[allowed-git]` | as committed in the developer's repository, at the current commit |
 | Everything else | absent from disk |
 | Hidden content in history | `git log -p`, `git show` and `git blame` show one line instead: `[claude-secure-sandbox] hidden by .claudesandbox` |
 | Visible files whose content is identical to a hidden file (a copy, a file moved out of a hidden directory) | absent too, listed once before Claude starts; changing such a file, even by one line, makes the new version visible |
 | Names of hidden files, their sizes, commit messages | visible |
 | The developer's branches | updated at each launch, without the hidden content |
 | The developer's uncommitted changes, and commits made during the session | not visible until they are committed, and the next launch |
+| Files git does not track, untracked or ignored (`.env`, `node_modules`, build outputs), even under a listed path | never in the copy |
+
+Only committed content reaches Claude, which also protects from mistakes: a `.env` with real credentials sitting in a listed directory stays out of Claude's reach, as long as it is not committed. Claude installs dependencies itself in its copy.
 
 Claude cannot build or test what depends on protected code. It builds what it can, and when a task needs a change in a hidden path, it describes the change for the developer to make by hand.
 
