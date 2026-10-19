@@ -15,10 +15,10 @@ from .context import Context
 
 # --- network -------------------------------------------------------------------
 
-DEFAULT_DOMAINS = [
-    "api.anthropic.com", "claude.ai", "platform.claude.com", "console.anthropic.com",
-    "statsig.anthropic.com", "mcp-proxy.anthropic.com",
-]
+# Claude's API and login, nothing else. Not mcp-proxy.anthropic.com: through
+# it, the claude.ai connectors (GitHub among them) read for Claude, with the
+# developer's rights, what the sandbox hides.
+DEFAULT_DOMAINS = ["api.anthropic.com", "claude.ai", "platform.claude.com", "console.anthropic.com"]
 
 # Git hosts that are always denied, on top of the hosts of the developer's remotes.
 GIT_HOSTS = [
@@ -124,7 +124,7 @@ def secrets(ctx: Context) -> List[str]:
     home = os.environ["HOME"]
     # Protected code first: it is the reason given when a path overlaps several.
     paths = list(ctx.protected_elsewhere)
-    if not ctx.directory_mode:
+    if ctx.protected:
         paths += [ctx.dev_root, ctx.dev_git_common]
     paths += [ctx.state_root, os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
     paths += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + user_temp_dirs()

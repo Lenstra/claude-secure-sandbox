@@ -1,10 +1,10 @@
 """Entry point of the `claude` wrapper.
 
 Every session runs Claude Code inside a sandbox (srt), where every protected
-repository of the computer is hidden. In a repository with a .claudesandbox
-(protected mode), Claude works on a filtered copy of it, with only the paths
-the file lists. Anywhere else (directory mode), Claude works in the
-directory itself.
+repository of the computer is hidden, neither readable nor writable. Started
+in a protected repository (one with a .claudesandbox), Claude works on a
+filtered copy of it, with only the paths the file lists. Anywhere else,
+Claude works in the directory itself.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ import sys
 from typing import List, NoReturn
 
 from . import access, claude_config, filtered_copy, sandbox, scan, session
-from .common import (LEGACY_PROTECT_FILE, SANDBOX_FILE, Lock, check_deps, die, find_real_claude, find_srt,
-                     log, path_within, realpath, state_root, volume_roots, warn)
+from .common import (LEGACY_PROTECT_FILE, SANDBOX_FILE, Lock, check_deps, check_seccomp, die, find_real_claude,
+                     find_srt, log, path_within, realpath, state_root, volume_roots, warn)
 from .context import Context
 from .sandbox_file import (confirm_access, confirm_visible, ever_protected, hidden_roots, is_visible,
                            leads_to_visible, read_sandbox_file, visible_hash)
@@ -44,7 +44,7 @@ def _sigterm(*_) -> NoReturn:
 
 
 def launch(ctx: Context, cwd: str, args: List[str]) -> int:
-    """Prepares the sandbox and runs Claude Code in it, in either mode."""
+    """Prepares the sandbox and runs Claude Code in it."""
     paths, domains = sorted(ctx.sandbox_file.paths), sorted(ctx.sandbox_file.domains)
     access.check_access(ctx, paths, domains)
     ctx.granted_paths, ctx.granted_domains = confirm_access(ctx.state, paths, domains)
@@ -64,10 +64,9 @@ def launch(ctx: Context, cwd: str, args: List[str]) -> int:
     return status
 
 
-def run_directory_mode(ctx: Context, cwd: str, args: List[str]) -> int:
+def run_in_place(ctx: Context, cwd: str, args: List[str]) -> int:
     """Nothing protected here: Claude works directly in the directory (the
     repository root, or the current directory outside a repository)."""
-    ctx.directory_mode = True
     # A directory that holds the home directory (or other disks) is readable,
     # but not writable: programs outside the sandbox run what lives there
     # (shell startup files, LaunchAgents, tool configurations).
@@ -84,7 +83,7 @@ def run_directory_mode(ctx: Context, cwd: str, args: List[str]) -> int:
         return 130
 
 
-def find_protected_elsewhere(ctx: Context, protected_mode: bool) -> None:
+def find_protected_elsewhere(ctx: Context, protected: bool) -> None:
     """Every other protected repository is hidden entirely: the whole computer
     is scanned at each launch. CLAUDE_SECURE_SANDBOX_SCAN=limited (tests)
     scans only the home directory and the session's directory."""
@@ -96,14 +95,14 @@ def find_protected_elsewhere(ctx: Context, protected_mode: bool) -> None:
             log("looking for protected repositories on this computer...")
         roots = scan.scan_roots()
     repos = scan.protected_repositories(ctx.state_root, roots)
-    if protected_mode:
+    if protected:
         nested = [r for r in repos if r != ctx.dev_root and path_within(ctx.dev_root, r)]
         if nested:
             die(f"protected code in {nested[0]}, inside this repository: run claude from that directory")
     ctx.protected_elsewhere = [r for r in repos if r != ctx.dev_root]
 
 
-def run_protected_mode(ctx: Context, cwd: str, args: List[str], was_protected: bool) -> int:
+def run_protected(ctx: Context, cwd: str, args: List[str], was_protected: bool) -> int:
     """A .claudesandbox: Claude works in a filtered copy of the repository,
     with only the confirmed [allowed-git] paths."""
     git_dir = realpath(ctx.git_dev.out("rev-parse", "--absolute-git-dir"))
@@ -116,7 +115,8 @@ def run_protected_mode(ctx: Context, cwd: str, args: List[str], was_protected: b
 
     protected, ctx.visible = confirm_visible(common_dir, ctx.sandbox_file, was_protected)
     if not protected:
-        return run_directory_mode(ctx, cwd, args)
+        return run_in_place(ctx, cwd, args)
+    ctx.protected = True
     ctx.visible_hash = visible_hash(ctx.visible)
     files = ctx.git_dev.value("ls-tree", "-r", "-z", "--name-only", "HEAD").split("\0")
     ctx.hidden, ctx.hidden_dirs = hidden_roots(ctx.visible, [f for f in files if f])
@@ -171,14 +171,15 @@ def main(root: str, args: List[str]) -> int:
     if not toplevel and ctx.sandbox_file.exists:
         die(f"{SANDBOX_FILE} protects a git repository, and this directory is not one: "
             "run git init, or remove the file")
-    # A repository that was ever protected stays in protected mode until the
+    # A repository that was ever protected stays protected until the
     # developer confirms otherwise (confirm_visible).
     was_protected = bool(toplevel) and ever_protected(ctx.git_dev)
-    protected_mode = ctx.sandbox_file.exists or was_protected
+    protected = ctx.sandbox_file.exists or was_protected
 
     check_deps()
     ctx.srt = find_srt(root) or die(f'srt not found: run "npm ci" in {root}')
-    find_protected_elsewhere(ctx, protected_mode)
-    if protected_mode:
-        return run_protected_mode(ctx, cwd, args, was_protected)
-    return run_directory_mode(ctx, cwd, args)
+    check_seccomp(ctx.srt)
+    find_protected_elsewhere(ctx, protected)
+    if protected:
+        return run_protected(ctx, cwd, args, was_protected)
+    return run_in_place(ctx, cwd, args)

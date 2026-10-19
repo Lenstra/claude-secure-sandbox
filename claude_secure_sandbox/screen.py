@@ -13,11 +13,11 @@ from .context import Context
 def protected_code_exists(ctx: Context) -> bool:
     """True when protected code exists on the computer: this repository, or
     another protected repository."""
-    return not ctx.directory_mode or bool(ctx.protected_elsewhere)
+    return ctx.protected or bool(ctx.protected_elsewhere)
 
 
 def session_label(ctx: Context) -> str:
-    if ctx.directory_mode:
+    if not ctx.protected:
         name = ctx.work if ctx.home_session else os.path.basename(ctx.work)
         return f"directory {name}" + (" (read only)" if ctx.home_session else "")
     branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
@@ -30,14 +30,14 @@ def display_path(path: str) -> str:
 
 
 def confirm_session(ctx: Context) -> bool:
-    """In a terminal, says which mode starts and why, then waits for Enter.
+    """In a terminal, says what Claude can see and edit, then waits for Enter.
     Returns False if the developer cancels."""
     if not (sys.stdin.isatty() and sys.stderr.isatty()):
         return True
     green, bold, reset = "\033[1;32m", "\033[1m", "\033[0m"
     others = [display_path(r) for r in ctx.protected_elsewhere]
     others_text = ", ".join(others[:3]) + (f" and {len(others) - 3} more" if len(others) > 3 else "")
-    if not ctx.directory_mode:
+    if ctx.protected:
         branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
         hidden = ", ".join(ctx.hidden[:5]) + (f" and {len(ctx.hidden) - 5} more"
                                               if len(ctx.hidden) > 5 else "")

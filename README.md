@@ -92,7 +92,7 @@ Then, as `install.sh` tells you with your own paths:
 
 ## Usage
 
-Every `claude` session runs in the sandbox, and shows it. At each launch, the wrapper first looks for protected repositories on your computer (`looking for protected repositories on this computer...`, a few seconds), so that it can hide them. Then a screen says why this mode, what Claude will not see and what happens to your files; press Enter to start, or Ctrl-C to cancel:
+Every `claude` session runs in the sandbox, and shows it. At each launch, the wrapper first looks for protected repositories on your computer (`looking for protected repositories on this computer...`, a few seconds), so that it can hide them. Then a screen says what applies here, what Claude will not see and what happens to your files; press Enter to start, or Ctrl-C to cancel:
 
 ```
 🔒 claude-secure-sandbox
@@ -147,7 +147,7 @@ registry.npmjs.org
 
 - **`[allowed-git]`**: the only paths Claude may see in the repository. Everything else is hidden, including what you add later. Paths are relative to the root; a directory shows everything below it. Literal paths only: no `*`, `?`, `[` or `!`. `.` shows the whole repository; an empty file hides all of it. Without the file, nothing is hidden: Claude works directly in your folder.
 - **`[allowed-external]`**: what Claude may read outside the repository, such as an SDK or a package cache. Absolute or `~/...`, read only.
-- **`[allowed-domain]`**: the network domains Claude may reach beyond Anthropic's, such as a package registry.
+- **`[allowed-domain]`**: the network domains Claude may reach beyond Claude's own API and login, such as a package registry. The claude.ai connectors (`mcp-proxy.anthropic.com`) are closed by default: a GitHub connector would read your protected code on GitHub.
 - Lines starting with `#` are comments. A `#` after an entry is part of it: put comments on their own line.
 
 Every section is an allowlist: what is not listed stays closed. The first time an entry appears, the wrapper asks you before Claude starts:
@@ -236,7 +236,7 @@ Everything else is in the [architecture document](docs/ARCHITECTURE.md):
 - [what Claude sees](docs/ARCHITECTURE.md#what-claude-sees) in its copy, and why some visible files are absent;
 - [what happens to the branches](docs/ARCHITECTURE.md#branches-at-a-new-session) when you run `claude` again, and the question asked when your branch and Claude's have diverged;
 - [the `.claudesandbox` file](docs/ARCHITECTURE.md#5-the-claudesandbox-file): what Claude sees in the repository, opening a path or a domain;
-- [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-session-modes), and [what Claude can read on your computer](docs/ARCHITECTURE.md#reading-an-allowlist-where-users-files-live);
+- [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-sessions), and [what Claude can read on your computer](docs/ARCHITECTURE.md#reading-an-allowlist-where-users-files-live);
 - [why there is no configuration file](docs/ARCHITECTURE.md#10-configuration), [troubleshooting](docs/ARCHITECTURE.md#troubleshooting) and [limits](docs/ARCHITECTURE.md#14-limits-and-troubleshooting).
 
 Tests: `npm test` (unit tests, then end-to-end tests in the real sandbox; `jq` required), `npm run test:linux` for the same suite on Linux, in Docker, and `python3 tests/tui-smoke.py` for the real Claude Code in a terminal. The CI runs them all on macOS and Linux.

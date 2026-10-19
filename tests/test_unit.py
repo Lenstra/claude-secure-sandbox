@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from claude_secure_sandbox.common import path_within  # noqa: E402
+from claude_secure_sandbox.common import check_seccomp, path_within  # noqa: E402
 from claude_secure_sandbox.access import domains_overlap, local_destination, path_tools, url_host  # noqa: E402
 from claude_secure_sandbox.sandbox_file import (SandboxFile, hidden_roots, is_visible,  # noqa: E402
                                                 leads_to_visible, normalize_visible, sparse_escape)
@@ -107,12 +107,27 @@ class VisibleTest(unittest.TestCase):
                          (["core", "lib/secret", "top.txt"], ["core", "lib/secret"]))
 
 
+class SeccompTest(unittest.TestCase):
+    def test_missing_helper_refused_on_linux(self):
+        import platform
+        from unittest import mock
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        srt = os.path.join(root, "node_modules", ".bin", "srt")
+        with mock.patch.object(platform, "system", return_value="Linux"):
+            with mock.patch.object(platform, "machine", return_value="riscv64"), \
+                    mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+                check_seccomp(srt)
+            with mock.patch.object(platform, "machine", return_value="x86_64"):
+                if os.path.exists(srt):
+                    check_seccomp(srt)
+
+
 class PathToolsTest(unittest.TestCase):
     def test_path_tools(self):
         from types import SimpleNamespace
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         ctx = SimpleNamespace(root=root, run_dir="/nonexistent/run", state_root="/nonexistent/state",
-                              protected_elsewhere=[], directory_mode=True)
+                              protected_elsewhere=[], protected=False)
         saved = dict(os.environ)
         try:
             os.environ["HOME"] = root

@@ -275,20 +275,20 @@ check "branch claude/feature-ok" git -C "$D" rev-parse -q --verify claude/featur
 check "branch claude/main" git -C "$D" rev-parse -q --verify claude/main
 check "a commit referencing hidden content does not break the fetch" git -C "$D" rev-parse -q --verify claude/bad-ref
 check "lock released" test ! -d "$COPY/state/lock"
-check "sessions separate from ~/.claude" test -f "$STATE_ROOT/claude-home/settings.json"
-check "settings passed through, not copied" test -L "$STATE_ROOT/claude-home/settings.json"
+check "sessions separate from ~/.claude" test -f "$COPY/claude-home/settings.json"
+check "settings passed through, not copied" test -L "$COPY/claude-home/settings.json"
 check "~/.claude untouched by the session" sh -c "! grep -q x '$T/home/.claude/settings.json' && test ! -e '$T/home/.claude/skills/demo/new.md'"
-check "plugins passed through, except the synced ones" sh -c "test -L '$STATE_ROOT/claude-home/plugins/marketplaces' && test ! -L '$STATE_ROOT/claude-home/plugins/synced'"
+check "plugins passed through, except the synced ones" sh -c "test -L '$COPY/claude-home/plugins/marketplaces' && test ! -L '$COPY/claude-home/plugins/synced'"
 check "~/.claude/plugins untouched by the session" sh -c "! grep -q x '$T/home/.claude/plugins/synced/org/manifest.json' && test ! -e '$T/home/.claude/plugins/marketplaces/demo/new.json'"
-check "onboarding and trust carried over" sh -c "jq -e --arg w '$COPY/work' '.hasCompletedOnboarding and .projects[\$w].hasTrustDialogAccepted' '$STATE_ROOT/claude-home/.claude.json'"
-check "mcpServers synced" sh -c "jq -e '.mcpServers.demo' '$STATE_ROOT/claude-home/.claude.json'"
-check "this repository's MCP servers synced" sh -c "jq -e --arg w '$COPY/work' '.projects[\$w].mcpServers[\"repo-mcp\"]' '$STATE_ROOT/claude-home/.claude.json'"
-check_not "other projects and account not copied" sh -c "grep -q 'other-mcp\|dev@example.com\|/other/project' '$STATE_ROOT/claude-home/.claude.json'"
+check "onboarding and trust carried over" sh -c "jq -e --arg w '$COPY/work' '.hasCompletedOnboarding and .projects[\$w].hasTrustDialogAccepted' '$COPY/claude-home/.claude.json'"
+check "mcpServers synced" sh -c "jq -e '.mcpServers.demo' '$COPY/claude-home/.claude.json'"
+check "this repository's MCP servers synced" sh -c "jq -e --arg w '$COPY/work' '.projects[\$w].mcpServers[\"repo-mcp\"]' '$COPY/claude-home/.claude.json'"
+check_not "other projects and account not copied" sh -c "grep -q 'other-mcp\|dev@example.com\|/other/project' '$COPY/claude-home/.claude.json'"
 check "system prompt lists protected paths" sh -c "grep -qF -- '- \`secret\`' '$COPY/run/system-prompt.md' && grep -qF -- '- \`lib/deep/core\`' '$COPY/run/system-prompt.md'"
 check "system prompt explains the placeholder" grep -qF "$PLACEHOLDER" "$COPY/run/system-prompt.md"
 
 section "Claude Code's login"
-CREDS=$STATE_ROOT/claude-home/.credentials.json
+CREDS=$COPY/claude-home/.credentials.json
 check "login copied from the keychain" grep -q FAKE-OAUTH-1 "$CREDS"
 check "login file private" test "$(python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$CREDS")" = 0o600
 echo '{"claudeAiOauth":{"accessToken":"REFRESHED","refreshToken":"r","expiresAt":2000}}' > "$CREDS"
@@ -326,10 +326,10 @@ section "new session: Claude's commits integrated (rebased and signed)"
   echo "public v4" > src/b.txt
   git add -A && git commit -qm c4
 )
-mkdir -p "$STATE_ROOT/claude-home/projects/-other-repo"
-echo "OTHER-TRANSCRIPT" > "$STATE_ROOT/claude-home/projects/-other-repo/abc.jsonl"
+mkdir -p "$STATE_ROOT/other-0123456789/claude-home/projects/-other-repo"
+echo "OTHER-TRANSCRIPT" > "$STATE_ROOT/other-0123456789/claude-home/projects/-other-repo/abc.jsonl"
 cat > "$T/fakebin/s2.sh" <<'EOF'
-name="other repositories' sessions are unreadable";   tn cat "$CLAUDE_CONFIG_DIR/projects/-other-repo/abc.jsonl"
+name="other repositories' sessions are unreadable";   tn cat "$CLAUDE_CONFIG_DIR/../../other-0123456789/claude-home/projects/-other-repo/abc.jsonl"
 name="sandbox Claude configuration is readable";      t cat "$CLAUDE_CONFIG_DIR/settings.json"
 rm -f "$CLAUDE_CONFIG_DIR/.claude.json" && ln -s "$CS_TEST_SECRET_JSON" "$CLAUDE_CONFIG_DIR/.claude.json"
 name="copy reset to the developer's branch";          t sh -c '[ "$(git rev-parse HEAD)" = "$(cat "$CS_TEST_EXPECTED")" ]'
@@ -353,8 +353,8 @@ EOF
 run_claude "$T/fakebin/s3.sh" --continue
 check "resume without reset" grep -q '^IN-OK' "$T/out/last"
 check "arguments passed to claude" grep -q -- 'ARGS .* --continue' "$T/out/last"
-check "planted .claude.json link replaced, not followed" sh -c "test ! -L '$STATE_ROOT/claude-home/.claude.json' && ! grep -q FAKE-JSON-SECRET '$STATE_ROOT/claude-home/.claude.json' && grep -q FAKE-JSON-SECRET '$T/secret.json'"
-check "mcpServers synced again" sh -c "jq -e .mcpServers.demo '$STATE_ROOT/claude-home/.claude.json'"
+check "planted .claude.json link replaced, not followed" sh -c "test ! -L '$COPY/claude-home/.claude.json' && ! grep -q FAKE-JSON-SECRET '$COPY/claude-home/.claude.json' && grep -q FAKE-JSON-SECRET '$T/secret.json'"
+check "mcpServers synced again" sh -c "jq -e .mcpServers.demo '$COPY/claude-home/.claude.json'"
 
 section "new session: diverged branches"
 ( cd "$D" && echo "dev work" > src/e.txt && git add -A && git commit -qm c5 )
@@ -634,19 +634,21 @@ check "protected repository below the launch directory: session started" grep -q
 collect
 check "a protected repository below is not written" test ! -e "$T/plain/sub/protected/new"
 
-section "directory mode: nothing protected here"
+section "nothing protected here: Claude works in the directory"
 F=$T/plain/free
 mkdir -p "$F/sub" && git init -q "$F" && echo "free readme" > "$F/README" && echo "sub file" > "$F/sub/s.txt"
 git -C "$F" add -A && git -C "$F" commit -qm init
 mkdir -p "$T/plain/nogit" && echo "loose" > "$T/plain/nogit/loose.txt"
 cat > "$T/fakebin/s-dir.sh" <<EOF
-name="directory mode: the repository is readable";        t cat "$F/README"
-name="directory mode: writing in the repository";          t sh -c 'echo new > "$F/new.txt"'
-name="directory mode: git commit";                         t sh -c 'cd "$F" && git add new.txt && git commit -qm "by claude"'
-name="directory mode: the protected repository is unreadable"; tn cat "$D/src/a.txt"
-name="directory mode: ~/.ssh is unreadable";               tn cat "$T/home/.ssh/id_test"
-name="directory mode: .git/hooks is not writable";         tn sh -c 'echo x > "$F/.git/hooks/pre-commit"'
-name="directory mode: .git/config is not writable";        tn sh -c 'echo x >> "$F/.git/config"'
+name="unprotected: the repository is readable";        t cat "$F/README"
+name="unprotected: writing in the repository";          t sh -c 'echo new > "$F/new.txt"'
+name="unprotected: git commit";                         t sh -c 'cd "$F" && git add new.txt && git commit -qm "by claude"'
+name="unprotected: the protected repository is unreadable"; tn cat "$D/src/a.txt"
+name="unprotected: ~/.ssh is unreadable";               tn cat "$T/home/.ssh/id_test"
+name="unprotected: .git/hooks is not writable";         tn sh -c 'echo x > "$F/.git/hooks/pre-commit"'
+name="unprotected: .git/config is not writable";        tn sh -c 'echo x >> "$F/.git/config"'
+name="unprotected: another repository's Claude configuration is unreadable"; tn ls "$COPY/claude-home"
+name="unprotected: its own Claude configuration";          t sh -c 'case "\$CLAUDE_CONFIG_DIR" in "$STATE_ROOT"/free-*/claude-home) ;; *) exit 1;; esac'
 EOF
 out=$(cd "$F/sub" && CS_TEST_SCENARIO=$T/fakebin/s-dir.sh claude --foo 2>&1 < /dev/null)
 printf '%s\n' "$out" > "$T/out/last"
@@ -655,7 +657,7 @@ check "arguments passed" grep -q -- 'ARGS .*--foo' "$T/out/last"
 collect
 check "Claude's commit is in the repository" sh -c "git -C '$F' log -1 --format=%s | grep -q 'by claude'"
 ( cd "$F" && sleep 3 | claude_in_terminal ) > "$T/out/screen" 2>&1
-check "directory mode screen: the other files are hidden" grep -q "not your other files" "$T/out/screen"
+check "unprotected screen: the other files are hidden" grep -q "not your other files" "$T/out/screen"
 mkdir -p "$T/home/never-opened" && echo "core" > "$T/home/never-opened/.claudeprotected"
 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from claude_secure_sandbox.scan import scan; print("\n".join(scan(sys.argv[2], [sys.argv[3]])))' \
   "$ROOT" "$STATE_ROOT" "$T" > "$T/out/scan"
@@ -782,7 +784,7 @@ check_not "without a terminal: domain not opened" grep -q registry.npmjs.org "$A
 check "answer no: not allowed" grep -q "not allowed for this session" "$T/out/last"
 check_not "answer no: domain not opened" grep -q registry.npmjs.org "$ACCESS_SETTINGS"
 cat > "$T/fakebin/s-access.sh" <<EOF
-if grep -q sandbox "$SDK/directory-mode.md" 2>/dev/null; then echo "IN-OK an allowed path is readable"; else echo "IN-FAIL an allowed path is readable"; fi
+if grep -q sandbox "$SDK/directory.md" 2>/dev/null; then echo "IN-OK an allowed path is readable"; else echo "IN-FAIL an allowed path is readable"; fi
 EOF
 ( cd "$A" && CS_TEST_SCENARIO=$T/fakebin/s-access.sh run_in_terminal y ) > "$T/out/last" 2>&1
 check "answer yes: allowed" grep -q "access allowed" "$T/out/last"
@@ -827,7 +829,7 @@ git init -q "$E" && (
   git rm -q "$PF" && git commit -qm "no protection left"
 )
 cat > "$T/fakebin/s-removed.sh" <<'EOF'
-if [ -e core/c.txt ]; then echo "IN-FAIL a repository that was protected stays in protected mode"; else echo "IN-OK a repository that was protected stays in protected mode"; fi
+if [ -e core/c.txt ]; then echo "IN-FAIL a repository that was protected stays protected"; else echo "IN-OK a repository that was protected stays protected"; fi
 EOF
 ( cd "$E" && CS_TEST_SCENARIO=$T/fakebin/s-removed.sh claude ) < /dev/null > "$T/out/last" 2>&1
 check "removal of the file detected" grep -q "is gone: Claude would read all of it" "$T/out/last"

@@ -35,7 +35,7 @@ def sync_claude_config(ctx: Context) -> None:
     dst = ctx.claude_home
     ensure_real_dir(dst)
     sensitive = [ctx.state_root, os.path.join(os.environ["HOME"], ".ssh")]
-    if not ctx.directory_mode:
+    if ctx.protected:
         sensitive += [ctx.dev_root, ctx.dev_git_common]
     for item in SYNC:
         target = os.path.join(dst, item)

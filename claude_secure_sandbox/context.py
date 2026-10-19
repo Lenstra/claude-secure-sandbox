@@ -14,12 +14,17 @@ class Context:
     def __init__(self, root: str, state_root: str):
         self.root = root
         self.state_root = state_root
-        self.claude_home = os.path.join(state_root, "claude-home")
+        # The session's Claude configuration, one per repository (setup_paths).
+        self.claude_home = ""
         self.real_claude = ""
         self.srt = ""
         self.dev_root = ""
         self.dev_git_common = ""
-        # Protected mode: the confirmed [allowed-git] paths, the only ones Claude
+        # True when dev_root holds a .claudesandbox: Claude works on a filtered
+        # copy of it. Otherwise nothing is protected here, and Claude works in
+        # dev_root itself.
+        self.protected = False
+        # In a protected repository: the confirmed [allowed-git] paths, the only ones Claude
         # sees, and the topmost hidden paths of HEAD, for display.
         self.visible: List[str] = []
         self.hidden: List[str] = []
@@ -28,11 +33,9 @@ class Context:
         self.placeholder = ""
         self.spec = ""
         self.fresh_copy = False
-        # Directory mode: no protected path; Claude works in dev_root itself.
-        self.directory_mode = False
         # Protected repositories other than the session's, entirely hidden.
         self.protected_elsewhere: List[str] = []
-        # Directory mode in a directory that holds the home directory: read only.
+        # Not protected, and dev_root holds the home directory: read only.
         self.home_session = False
         # Real paths of the ~/.claude items passed through to the sandbox.
         self.config_read: List[str] = []
@@ -67,6 +70,9 @@ class Context:
         self.state = os.path.join(self.repo_dir, "state")
         self.run_dir = os.path.join(self.repo_dir, "run")
         self.tmp = os.path.join(self.repo_dir, "tmp")
+        # Never shared between repositories: what a session writes there would
+        # reach another repository's sessions, which allow other domains.
+        self.claude_home = os.path.join(self.repo_dir, "claude-home")
         # Wrapper temp files: never in tmp/, which Claude can modify (a symlink
         # there would make the wrapper write anywhere).
         self.wtmp = os.path.join(self.state, "tmp")

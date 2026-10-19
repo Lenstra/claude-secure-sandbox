@@ -204,6 +204,20 @@ def find_srt(root: str) -> Optional[str]:
     return local if os.access(local, os.X_OK) else None
 
 
+def check_seccomp(srt: str) -> None:
+    """Linux: srt keeps Unix sockets closed (Docker, D-Bus, an SSH agent: services
+    running outside the sandbox) with a seccomp filter. Without its helper for
+    this architecture, srt runs anyway, with a mere warning: refuse instead."""
+    if platform.system() != "Linux":
+        return
+    arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine().lower())
+    package = os.path.dirname(os.path.dirname(realpath(srt)))
+    helper = os.path.join(package, "vendor", "seccomp", arch or "none", "apply-seccomp")
+    if not os.access(helper, os.X_OK):
+        die(f"srt's seccomp helper not found for {platform.machine()} ({helper}): without it, "
+            "Unix sockets, and the services behind them, would stay reachable from the sandbox")
+
+
 # Mount points of other disks: never readable, and never a working directory.
 VOLUME_ROOTS = {"Darwin": ["/Volumes"], "Linux": ["/mnt", "/media", "/run/media"]}
 

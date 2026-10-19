@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import platform
@@ -19,7 +18,6 @@ from .claude_config import PRIVATE_CLAUDE_ITEMS, claude_settings
 from .common import (NAME, PLACEHOLDER_TEXT, SANDBOX_FILE, die, ensure_real_dir, log, overlaps, path_within,
                      read_text, realpath, stamp, volume_roots, warn, write_text)
 from .context import Context
-from .filtered_copy import claude_project_dir
 from .screen import confirm_session, protected_code_exists
 
 # Paths of the copy's .git that Claude must not write: the wrapper's git or
@@ -81,7 +79,7 @@ def write_tool_links(ctx: Context) -> None:
 
 
 def write_system_prompt(ctx: Context) -> None:
-    name = "directory-mode.md" if ctx.directory_mode else "protected-mode.md"
+    name = "protected-repository.md" if ctx.protected else "directory.md"
     template = read_text(os.path.join(ctx.root, "share", "prompts", name))
     if ctx.home_session:
         access = ("You work in this directory, which holds the developer's home directory. You can read it, "
@@ -117,22 +115,6 @@ def make_srt_tmp(ctx: Context) -> None:
 # --- srt settings --------------------------------------------------------------
 
 
-def other_sessions(ctx: Context) -> List[str]:
-    """Sessions of other repositories, in the shared Claude configuration."""
-    mine = claude_project_dir(ctx)
-    result = []
-    for d in sorted(glob.glob(os.path.join(ctx.claude_home, "projects", "*"))):
-        if not os.path.isdir(d) or d == mine:
-            continue
-        result.append(d)
-        for transcript in glob.glob(os.path.join(d, "*.jsonl")):
-            sid = os.path.basename(transcript)[:-len(".jsonl")]
-            history = os.path.join(ctx.claude_home, "file-history", sid)
-            if os.path.lexists(history):
-                result.append(history)
-    return result
-
-
 def _claude_install_dir(ctx: Context) -> str:
     """Claude Code's installation, readable by the session. The local install
     (~/.claude/local) only holds the program; any other location inside a
@@ -142,7 +124,7 @@ def _claude_install_dir(ctx: Context) -> str:
     if path_within(f"{home}/.claude/local", claude_dir):
         return f"{home}/.claude/local"
     sensitive = [ctx.state_root, f"{home}/.ssh", f"{home}/.claude", f"{home}/.claude.json"]
-    if not ctx.directory_mode:
+    if ctx.protected:
         sensitive += [ctx.dev_root, ctx.dev_git_common]
     for path in sensitive:
         if overlaps(path, claude_dir):
@@ -155,19 +137,20 @@ def _read_rules(ctx: Context) -> Tuple[List[str], List[str]]:
     the other disks, the temp directories) nothing is readable but what the
     session needs; the system and the tools installed elsewhere are. Inside,
     these stay hidden even where an allowance covers them (in srt, a more
-    specific deny beats an allow): the developer's repository in protected
-    mode, every other protected repository, the wrapper's state except the
-    session's own, old Claude transcripts, credentials.
+    specific deny beats an allow): the developer's repository when it is
+    protected, every other protected repository, the wrapper's state except
+    the session's own (other repositories' sessions included), old Claude
+    transcripts, credentials.
 
     A session in the home directory works in it, so the user areas stay
     readable; credentials and temp directories are then hidden only when
     protected code exists on the computer."""
     home = os.environ["HOME"]
-    deny = [ctx.state, ctx.archive] + other_sessions(ctx) + ctx.protected_elsewhere
+    deny = [ctx.state, ctx.archive] + ctx.protected_elsewhere
     deny += [os.path.join(ctx.state_root, e) for e in sorted(os.listdir(ctx.state_root))
-             if os.path.join(ctx.state_root, e) not in (ctx.claude_home, ctx.repo_dir)]
+             if os.path.join(ctx.state_root, e) != ctx.repo_dir]
     deny += [os.path.join(home, ".claude", item) for item in PRIVATE_CLAUDE_ITEMS]
-    if not ctx.directory_mode:
+    if ctx.protected:
         deny += [ctx.dev_root, ctx.dev_git_common]
     if not ctx.home_session or protected_code_exists(ctx):
         deny += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + user_temp_dirs()
