@@ -51,19 +51,16 @@ for marker in "$STATE"/*/state/repository; do
   fi
   git -C "$repo" config --get remote.claude.url >/dev/null 2>&1 &&
     lines+="   git -C '$repo' remote remove claude"$'\n'
-  common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
-  [ -n "$common" ] && [ -d "$common/$NAME" ] &&
-    lines+="   rm -rf '$common/$NAME'      # what you confirmed Claude may see"$'\n'
   repos+="$lines"
 done
 if [ -n "$repos" ]; then
-  title "In each repository you used it in: the \"claude\" remote, and what you confirmed Claude may see."
+  title "In each repository you used it in: the \"claude\" remote."
   printf '%s' "$repos"
 fi
 
 # State, the tool itself.
 if [ -d "$STATE" ]; then
-  title "The wrapper's state: Claude's copies, archives and sessions, the access you confirmed, and its copy of your Claude Code login."
+  title "The wrapper's state: Claude's copies, archives and sessions, what you confirmed Claude may see and reach, and its copy of your Claude Code login."
   echo "   rm -rf '$STATE'"
 fi
 title "The tool itself."

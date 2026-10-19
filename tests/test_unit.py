@@ -72,8 +72,7 @@ class SandboxFileTest(unittest.TestCase):
             "[allowed-domain]\n*\n": "not allowed",
             "[allowed-domain]\nhttps://x.com/\n": "invalid domain",
             "[allowed-git]\n/etc\n": "absolute path",
-            "[protected]\nsecret\n": "replaced by [allowed-git",
-            "[visible]\nsrc\n": "[visible] is replaced by [allowed-git]",
+            "[protected]\nsecret\n": "unknown section [protected]",
         }
         for content, message in cases.items():
             with self.subTest(content=content):

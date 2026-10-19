@@ -137,8 +137,6 @@ git init -q "$D"
   git branch -q -D side
   git branch -q other
 )
-# The developer confirmed these paths at a first launch (tested further down).
-mkdir -p "$D/.git/claude-secure-sandbox" && printf 'lib/deep/public\nsrc\n' > "$D/.git/claude-secure-sandbox/visible"
 SECRETS='SECRET-ONE SECRET-TWO MOVED-SECRET DEEP-SECRET DUP-SECRET SIDE-COPY FAKE-SSH-KEY'
 
 # The developer signs their commits with an SSH key, which must stay out of
@@ -156,6 +154,8 @@ PROBE_TMP=$(mktemp /tmp/cs-probe.XXXXXX); echo "PROBE" > "$PROBE_TMP"
 PROBE_USER_TMP=$(mktemp "${USER_TMP}cs-probe.XXXXXX"); echo "PROBE" > "$PROBE_USER_TMP"
 
 COPY=$STATE_ROOT/repo-$(python3 -c 'import hashlib, sys; print(hashlib.sha1(sys.argv[1].encode()).hexdigest()[:10])' "$D")
+# The developer confirmed these paths at a first launch (tested further down).
+mkdir -p "$COPY/state" && printf 'see lib/deep/public\nsee src\n' > "$COPY/state/granted"
 
 run_claude() { # scenario, args...
   local scenario=$1; shift
@@ -476,13 +476,13 @@ collect
 run_claude_answer y "$T/fakebin/s-visible.sh"
 check "answer yes: shown" grep -q "paths shown" "$T/out/last"
 collect
-check "confirmation stored in the developer's .git" grep -qx secret "$D/.git/claude-secure-sandbox/visible"
+check "confirmation stored in the wrapper's state" grep -qx "see secret" "$COPY/state/granted"
 run_claude "$T/fakebin/s-visible.sh"
 check_not "no question once confirmed" grep -q "could not see before" "$T/out/last"
 ( cd "$D" && printf '[allowed-git]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\n' > "$PF" && git commit -qam "hide secret again" )
 run_claude "$T/fakebin/s-hidden.sh"
 collect
-check "confirmation dropped when hidden again" sh -c "! grep -qx secret '$D/.git/claude-secure-sandbox/visible'"
+check "confirmation dropped when hidden again" sh -c "! grep -qx 'see secret' '$COPY/state/granted'"
 
 section "a new path created by Claude, listed later by the developer"
 cat > "$T/fakebin/s-newpath.sh" <<'EOF'
@@ -648,6 +648,9 @@ name="unprotected: ~/.ssh is unreadable";               tn cat "$T/home/.ssh/id_
 name="unprotected: .git/hooks is not writable";         tn sh -c 'echo x > "$F/.git/hooks/pre-commit"'
 name="unprotected: .git/config is not writable";        tn sh -c 'echo x >> "$F/.git/config"'
 name="unprotected: another repository's Claude configuration is unreadable"; tn ls "$COPY/claude-home"
+name="unprotected: another repository's confirmations are not writable"; tn sh -c 'echo "see ." >> "$COPY/state/granted"'
+name="unprotected: its own confirmations are not writable";  tn sh -c 'echo "see ." >> "\$CLAUDE_CONFIG_DIR/../state/granted"'
+
 name="unprotected: its own Claude configuration";          t sh -c 'case "\$CLAUDE_CONFIG_DIR" in "$STATE_ROOT"/free-*/claude-home) ;; *) exit 1;; esac'
 EOF
 out=$(cd "$F/sub" && CS_TEST_SCENARIO=$T/fakebin/s-dir.sh claude --foo 2>&1 < /dev/null)
@@ -743,10 +746,7 @@ out=$(cd "$T/plain/badrepo" && claude 2>&1)
 check "an unknown section is refused" has "$out" 'unknown section'
 printf '[protected]\nsecret\n' > "$T/plain/badrepo/$PF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
-check "[protected] is refused, with the way to convert it" has "$out" 'replaced by \[allowed-git'
-printf '[visible]\nsrc\n' > "$T/plain/badrepo/$PF"
-out=$(cd "$T/plain/badrepo" && claude 2>&1)
-check "a section of an earlier version is refused, with its new name" has "$out" '\[visible\] is replaced by \[allowed-git\]'
+check "a section of an earlier version is refused" has "$out" 'unknown section \[protected\]'
 rm "$T/plain/badrepo/$PF"
 echo "core" > "$T/plain/badrepo/.claudeprotected"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)

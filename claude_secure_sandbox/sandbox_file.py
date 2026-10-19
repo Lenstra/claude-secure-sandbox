@@ -14,22 +14,14 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
-import subprocess
 from typing import List, Set, Tuple
 
-from .common import (LEGACY_PROTECT_FILE, NAME, SANDBOX_FILE, Git, ask, die, expand_home, log, path_within,
-                     read_lines, read_text, sha1, warn, write_lines)
+from .common import (SANDBOX_FILE, Git, ask, die, expand_home, log, path_within, read_lines, read_text, sha1,
+                     warn, write_lines)
 
 SECTIONS = ("allowed-git", "allowed-external", "allowed-domain")
-# Section names of earlier versions, and what replaced them.
-RENAMED = {"visible": "allowed-git", "path": "allowed-external", "domain": "allowed-domain",
-           "protected": "allowed-git (list what Claude may see; everything else is hidden)"}
 _PATTERN_CHARS = set("*?[\\")
 _DOMAIN = re.compile(r"^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$")
-# Stored among the [allowed-git] confirmations when the developer stops
-# protecting a repository: never a valid path (patterns are refused).
-UNPROTECTED = "*unprotected*"
 
 
 # --- reading -------------------------------------------------------------------
@@ -53,9 +45,7 @@ class SandboxFile:
                 continue
             if line.startswith("[") and line.endswith("]"):
                 section = line[1:-1].strip().lower()
-                if section in RENAMED:
-                    self.errors.append(f"line {number}: [{section}] is replaced by [{RENAMED[section]}]")
-                elif section not in SECTIONS:
+                if section not in SECTIONS:
                     self.errors.append(f"line {number}: unknown section {line} "
                                        "(sections: [allowed-git], [allowed-external], [allowed-domain])")
                 continue
@@ -191,55 +181,6 @@ def sparse_escape(path: str) -> str:
     return path
 
 
-# --- protected repositories on the computer --------------------------------------
-
-
-def find_sandbox_files(root: str, one_file_system: bool = False, timeout: float = None) -> List[str]:
-    """Every .claudesandbox (and earlier .claudeprotected) under root (fd,
-    else rg, else find), skipping .git and node_modules, and ~/Library when
-    root is the home directory."""
-    home = os.environ["HOME"]
-    # fd is installed as fdfind on Debian and Ubuntu.
-    fd = shutil.which("fd") or shutil.which("fdfind")
-    if fd:
-        cmd = [fd, "-H", "-I", "-t", "f", "--exclude", ".git", "--exclude", "node_modules"]
-        if root == home:
-            cmd += ["--exclude", "Library"]
-        if one_file_system:
-            cmd += ["--one-file-system"]
-        cmd += [f"^\\.({SANDBOX_FILE[1:]}|{LEGACY_PROTECT_FILE[1:]})$", root]
-    elif shutil.which("rg"):
-        cmd = ["rg", "--files", "--hidden", "--no-ignore", "--no-messages",
-               "-g", SANDBOX_FILE, "-g", LEGACY_PROTECT_FILE, "-g", "!.git", "-g", "!node_modules"]
-        if root == home:
-            cmd += ["-g", f"!{home}/Library"]
-        if one_file_system:
-            cmd += ["--one-file-system"]
-        cmd += [root]
-    else:
-        cmd = ["find", root] + (["-xdev"] if one_file_system else []) + [
-            "(", "-name", ".git", "-o", "-name", "node_modules", ")", "-prune",
-            "-o", "-type", "f", "(", "-name", SANDBOX_FILE, "-o", "-name", LEGACY_PROTECT_FILE, ")", "-print"]
-    try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              encoding="utf-8", errors="surrogateescape", timeout=timeout)
-        output = proc.stdout
-    except subprocess.TimeoutExpired as e:
-        output = e.stdout.decode("utf-8", "surrogateescape") if isinstance(e.stdout, bytes) else (e.stdout or "")
-    found = []
-    for f in output.splitlines():
-        f = f.rstrip("/")
-        if f:
-            found.append(f if f.startswith("/") else f"{root}/{f[2:] if f.startswith('./') else f}")
-    return found
-
-
-def protects(directory: str) -> bool:
-    """True if the directory is protected: it holds a .claudesandbox, or an
-    earlier .claudeprotected."""
-    return any(os.path.isfile(os.path.join(directory, f)) for f in (SANDBOX_FILE, LEGACY_PROTECT_FILE))
-
-
 def ever_protected(git_dev: Git) -> bool:
     """True if the file was ever committed in HEAD's history."""
     return bool(git_dev.value("-c", "log.showSignature=false", "log", "-1", "--format=%H", "--full-history",
@@ -247,6 +188,27 @@ def ever_protected(git_dev: Git) -> bool:
 
 
 # --- confirmations -------------------------------------------------------------
+
+
+class Grants:
+    """What the developer confirmed for a repository, one "<kind> <value>" line
+    each in state/granted: "see" ([allowed-git]), "read" ([allowed-external]),
+    "domain" ([allowed-domain]), and "unprotected" once the developer stopped
+    protecting it. The wrapper's state is out of every sandbox's reach."""
+
+    def __init__(self, state: str):
+        self.path = os.path.join(state, "granted")
+        self.lines = read_lines(self.path)
+
+    def get(self, kind: str) -> List[str]:
+        return [value for k, _, value in (line.partition(" ") for line in self.lines) if k == kind]
+
+    def set(self, kind: str, values: List[str]) -> None:
+        lines = [line for line in self.lines if line.partition(" ")[0] != kind]
+        lines += [f"{kind} {v}".rstrip() for v in values]
+        if lines != self.lines:
+            self.lines = lines
+            write_lines(self.path, lines)
 
 
 def _ask(title: str, items: List[str], question: str, yes: str, no: str, no_terminal: str) -> bool:
@@ -263,58 +225,51 @@ def _ask(title: str, items: List[str], question: str, yes: str, no: str, no_term
     return False
 
 
-def _store(path: str, before: List[str], after: List[str]) -> None:
-    if after != before:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        write_lines(path, after)
-
-
-def confirm_visible(git_common: str, current: SandboxFile, was_protected: bool) -> Tuple[bool, List[str]]:
+def confirm_visible(state: str, current: SandboxFile, was_protected: bool) -> Tuple[bool, List[str]]:
     """Each [allowed-git] entry is shown to Claude once the developer has
     confirmed it, unless it lies under a confirmed one (narrowing never asks);
     a confirmation ends when its entry leaves the file. A repository that was
     protected stays protected until the developer confirms it no longer is.
-    Confirmations live in the developer's .git, out of the sandbox's reach.
     Returns (protected, the paths Claude may see)."""
-    store = os.path.join(git_common, NAME, "visible")
-    stored = read_lines(store)
+    grants = Grants(state)
+    seen = grants.get("see")
     if not current.exists:
-        if not was_protected or UNPROTECTED in stored:
+        if not was_protected or grants.get("unprotected"):
             return False, []
         if _ask(f"this repository was protected, and its {SANDBOX_FILE} is gone: Claude would read all of it",
                 [], "stop protecting it? [y/N] ", "protection removed",
                 f"it stays protected; restore {SANDBOX_FILE} to stop this question",
                 "no terminal to confirm: it stays protected"):
-            _store(store, stored, [UNPROTECTED])
+            grants.set("see", [])
+            grants.set("unprotected", [""])
             return False, []
-        return True, [e for e in stored if e != UNPROTECTED]
-    confirmed = sorted(e for e in current.visible
-                       if any(c == "." or path_within(c, e) for c in stored if c != UNPROTECTED))
+        return True, seen
+    confirmed = sorted(e for e in current.visible if any(c == "." or path_within(c, e) for c in seen))
     new = sorted(current.visible - set(confirmed))
     if new and _ask(f"{SANDBOX_FILE} shows Claude paths it could not see before:", new,
                     "show them to Claude? [y/N] ", "paths shown",
                     "they stay hidden; the question comes back at the next launch",
                     "no terminal to confirm: they stay hidden"):
         confirmed = sorted(confirmed + new)
-    _store(store, stored, confirmed)
+    grants.set("unprotected", [])
+    grants.set("see", confirmed)
     return True, confirmed
 
 
 def confirm_access(state: str, paths: List[str], domains: List[str]) -> Tuple[List[str], List[str]]:
-    """Each [allowed-external] and [allowed-domain] entry is granted once the developer has
-    confirmed it; a confirmation ends when its entry leaves the file.
-    Confirmations live in the wrapper's state, out of the sandbox's reach.
-    Returns the granted (paths, domains)."""
-    store = os.path.join(state, "granted")
-    stored = read_lines(store)
-    asked = [f"read {p}" for p in paths] + [f"domain {d}" for d in domains]
-    confirmed = [e for e in asked if e in stored]
-    new = [e for e in asked if e not in stored]
+    """Each [allowed-external] and [allowed-domain] entry is granted once the
+    developer has confirmed it; a confirmation ends when its entry leaves the
+    file. Returns the granted (paths, domains)."""
+    grants = Grants(state)
+    granted = {"read": [p for p in paths if p in grants.get("read")],
+               "domain": [d for d in domains if d in grants.get("domain")]}
+    new = [f"read {p}" for p in paths if p not in granted["read"]]
+    new += [f"domain {d}" for d in domains if d not in granted["domain"]]
     if new and _ask(f"{SANDBOX_FILE} asks for access Claude does not have by default:", new,
                     "allow it? [y/N] ", "access allowed",
                     "not allowed for this session; the question comes back at the next launch",
                     "no terminal to confirm: not allowed for this session"):
-        confirmed += new
-    _store(store, stored, confirmed)
-    return ([e[len("read "):] for e in confirmed if e.startswith("read ")],
-            [e[len("domain "):] for e in confirmed if e.startswith("domain ")])
+        granted = {"read": paths, "domain": domains}
+    for kind, values in granted.items():
+        grants.set(kind, values)
+    return granted["read"], granted["domain"]

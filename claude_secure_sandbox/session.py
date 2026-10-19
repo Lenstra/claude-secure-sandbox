@@ -9,7 +9,6 @@ applies the placeholders.
 
 from __future__ import annotations
 
-import os
 import sys
 from typing import Dict, List
 
@@ -32,13 +31,8 @@ def ensure_dev_remote(ctx: Context) -> None:
     g = ctx.git_dev
     url = g.value("config", "--get", "remote.claude.url")
     if url and url != ctx.work:
-        # Earlier versions published to <repo>/outbox.git.
-        if url == os.path.join(ctx.repo_dir, "outbox.git"):
-            g.run("remote", "remove", "claude", quiet=True)
-            url = ""
-        else:
-            warn(f'a remote "claude" already exists ({url}); Claude\'s branches are in {ctx.work}')
-            return
+        warn(f'a remote "claude" already exists ({url}); Claude\'s branches are in {ctx.work}')
+        return
     if not url:
         if not g.ok("remote", "add", "claude", ctx.work):
             warn('cannot add the remote "claude"')

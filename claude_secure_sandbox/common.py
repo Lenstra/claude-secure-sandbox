@@ -184,16 +184,12 @@ def state_root() -> str:
 # --- binaries ------------------------------------------------------------------
 
 
-def is_executable_file(path: str) -> bool:
-    return os.path.isfile(path) and os.access(path, os.X_OK)
-
-
 def find_real_claude(root: str) -> Optional[str]:
     """The first "claude" on the PATH that is not this wrapper."""
     me = realpath(os.path.join(root, "bin", "claude"))
     for d in os.environ.get("PATH", "").split(":"):
         candidate = os.path.join(d or ".", "claude")
-        if is_executable_file(candidate) and realpath(candidate) != me:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK) and realpath(candidate) != me:
             return candidate
     return None
 

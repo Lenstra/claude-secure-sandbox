@@ -113,7 +113,8 @@ def run_protected(ctx: Context, cwd: str, args: List[str], was_protected: bool) 
         warn("submodules are not supported (v1): their content will be missing from the copy")
     ctx.dev_git_common = common_dir
 
-    protected, ctx.visible = confirm_visible(common_dir, ctx.sandbox_file, was_protected)
+    ctx.setup_paths()
+    protected, ctx.visible = confirm_visible(ctx.state, ctx.sandbox_file, was_protected)
     if not protected:
         return run_in_place(ctx, cwd, args)
     ctx.protected = True
@@ -128,7 +129,6 @@ def run_protected(ctx: Context, cwd: str, args: List[str], was_protected: bool) 
             "run claude from a directory Claude can see")
     resume = any(a in RESUME or a.startswith("--resume=") for a in args)
 
-    ctx.setup_paths()
     ctx.lock = Lock(ctx.state)
     signal.signal(signal.SIGTERM, _sigterm)
     try:

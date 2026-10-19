@@ -1,2 +1,3 @@
-"""claude-secure-sandbox: run Claude Code on a filtered copy of a repository,
-inside an OS sandbox, without access to the paths listed in .claudeprotected."""
+"""claude-secure-sandbox: run Claude Code inside an OS sandbox, where every
+protected repository is hidden, and a protected repository's own code is
+filtered by its .claudesandbox."""

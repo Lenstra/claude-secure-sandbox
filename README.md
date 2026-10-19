@@ -202,21 +202,20 @@ claude                                          # 6. next session, from your lat
 `claude --continue` and `claude --resume` resume the previous conversation, with the copy as Claude left it.
 
 > [!IMPORTANT]
-> Review Claude's commits like any contribution before integrating them. Build scripts, `package.json` or CI changes run on your machine or your CI once merged, outside the sandbox.
+> Review Claude's commits like any contribution before integrating them. Build scripts, `package.json` or CI changes run on your machine or your CI once merged, outside the sandbox. Outside a protected repository, Claude writes in your folder directly: a dev server, a file watcher or an IDE extension running on that folder runs what Claude writes there, outside the sandbox.
 
 ## Uninstallation
 
 `./uninstall.sh` changes nothing: it lists what to remove on your machine, with the exact paths and commands. Remove, in this order:
 
 1. **The PATH line** you added to your shell startup file (`export PATH=".../claude-secure-sandbox/bin:$PATH"`), then open a new shell: `claude` runs Claude Code directly.
-2. **In each repository you used it in**, the `claude` remote and what you confirmed Claude may see.
+2. **In each repository you used it in**, the `claude` remote.
 
    ```bash
    git remote remove claude
-   rm -rf .git/claude-secure-sandbox
    ```
 
-3. **The wrapper's state**: Claude's copies, archives and sessions, the access you confirmed, and its copy of your Claude Code login.
+3. **The wrapper's state**: Claude's copies, archives and sessions, what you confirmed Claude may see and reach, and its copy of your Claude Code login.
 
    ```bash
    rm -rf ~/.cache/claude-secure-sandbox

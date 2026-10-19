@@ -176,7 +176,7 @@ registry.npmjs.org
 
 Every section is an allowlist: what is not listed stays closed, so a forgotten entry hides something instead of exposing it.
 
-A line outside a section, an unknown section or an invalid entry stops the launch with the list of errors. Lines that start with `#`, and empty lines, are ignored. The section names of earlier versions (`[protected]`, `[visible]`, `[path]`, `[domain]`) and a `.claudeprotected` file stop the launch with the way to convert them; the scan still treats a directory that holds a `.claudeprotected` as protected.
+A line outside a section, an unknown section or an invalid entry stops the launch with the list of errors. Lines that start with `#`, and empty lines, are ignored. A `.claudeprotected` file, from an earlier version, stops the launch with the way to convert it; the scan still treats a directory that holds one as protected.
 
 ### `[allowed-git]`
 
@@ -220,7 +220,7 @@ claude-secure-sandbox: allow it? [y/N]
 - The file is read on disk only: a version committed at `HEAD` but not on disk opens nothing.
 - Without a terminal (`claude -p` in a script), or when the developer answers no, nothing new is opened, and the question comes back at the next launch.
 - A confirmation ends when its entry leaves the file: adding it again asks again.
-- `[allowed-git]` confirmations live in the developer's `.git/claude-secure-sandbox/visible`, the others in the wrapper's state (`state/granted`), out of the sandbox's reach. Losing them only means being asked again: it never opens anything.
+- Every confirmation lives in the wrapper's state (`state/granted`, one `see`, `read`, `domain` or `unprotected` line each), out of every sandbox's reach, including a session that works directly in the repository before it is protected. Losing them only means being asked again: it never opens anything.
 
 ## 6. The filtered copy
 
@@ -684,12 +684,12 @@ Per repository, in `~/.cache/claude-secure-sandbox/<repo>-<hash>/`:
 | `state/host-tips` | developer commits already fetched and scanned | none |
 | `state/visible-hash` | hash of the confirmed `[allowed-git]` list | none |
 | `state/reported-absent` | visible files already reported as absent | none |
-| `state/granted` | confirmed `[allowed-external]` and `[allowed-domain]` entries | none |
+| `state/granted` | confirmed `[allowed-git]`, `[allowed-external]` and `[allowed-domain]` entries, and whether the developer stopped protecting the repository | none |
 | `state/repository` | path of the developer's repository, so that `uninstall.sh` can list what to remove, and the machine scan hides it even where it cannot reach | none |
 | `state/lock`, `state/tmp` | session lock, wrapper temp files | none |
 | `archive/<date>-<reason>/` | previous copies and sessions, after a rebuild | none |
 
-In the developer's repository: the `claude` remote in `.git/config`, and the confirmed `[allowed-git]` entries in `.git/claude-secure-sandbox/visible`.
+In the developer's repository: the `claude` remote in `.git/config`.
 
 Nothing is shared between repositories: what a session could leave in a shared Claude configuration (a memory file, a transcript) would reach the sessions of another repository, whose `.claudesandbox` may allow other domains. A `~/.cache/claude-secure-sandbox/claude-home` left by an earlier version is no longer used, and is unreadable from the sandbox.
 
@@ -705,7 +705,7 @@ claude_secure_sandbox/sandbox_file.py       .claudesandbox: reading, what Claude
 claude_secure_sandbox/access.py             what a session may reach: domains, secrets, tools on the PATH
 claude_secure_sandbox/filtered_copy.py      filtered copy: fetch, fingerprints, placeholders
 claude_secure_sandbox/session.py            claude remote, branches at launch, end of session summary
-claude_secure_sandbox/scan.py               machine scan for protected repositories, at each launch
+claude_secure_sandbox/scan.py               machine scan for protected repositories (fd, rg or find), at each launch
 claude_secure_sandbox/claude_config.py      configuration passthrough, MCP servers, login, status line settings
 claude_secure_sandbox/screen.py             start screen, session label, protected_code_exists
 claude_secure_sandbox/sandbox.py            srt settings (read and write rules), git configuration, system prompt, launch

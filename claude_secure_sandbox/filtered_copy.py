@@ -115,11 +115,9 @@ def fetch_from_dev(ctx: Context) -> List[str]:
         "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules",
         f"--filter=sparse:oid={ctx.spec}", f"--upload-pack={upload_pack}", "--stdin", "host",
         input=refspecs)
-    # Delete leftovers and tags that no longer exist on the developer side
-    # (refs/remotes/host: the developer's branches in earlier versions).
+    # Delete leftovers and tags that no longer exist on the developer side.
     wanted = {ref for _, ref in refs}
-    existing = ctx.git_copy.out("for-each-ref", "--format=%(refname)",
-                                INCOMING, "refs/remotes/host", "refs/tags").splitlines()
+    existing = ctx.git_copy.out("for-each-ref", "--format=%(refname)", INCOMING, "refs/tags").splitlines()
     stale = [ref for ref in existing if ref and ref not in wanted]
     if stale:
         ctx.git_copy.out("update-ref", "--stdin", input="".join(f"delete {r}\n" for r in stale))
@@ -260,10 +258,7 @@ def install_placeholders(ctx: Context, new: Set[str]) -> None:
 
 def prepare_copy(ctx: Context) -> None:
     """Creates the copy if needed, or updates it. Rebuilds it if a check fails."""
-    try:
-        old_hash = open(ctx.state_file("visible-hash")).read().strip()
-    except OSError:
-        old_hash = ""
+    old_hash = "".join(read_lines(ctx.state_file("visible-hash")))
     rebuild = ""
     if not os.path.isdir(ctx.copy_git):
         rebuild = "init"
@@ -304,9 +299,9 @@ def prepare_copy(ctx: Context) -> None:
     die("cannot get a copy free of hidden content; session cancelled")
 
 
-def claude_project_dir(ctx: Context, path: str = "") -> str:
-    """Claude Code's session directory for a given working directory."""
-    encoded = "".join(c if c.isascii() and c.isalnum() else "-" for c in (path or ctx.work))
+def claude_project_dir(ctx: Context) -> str:
+    """Claude Code's session directory for the copy."""
+    encoded = "".join(c if c.isascii() and c.isalnum() else "-" for c in ctx.work)
     return os.path.join(ctx.claude_home, "projects", encoded)
 
 
