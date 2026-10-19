@@ -748,7 +748,11 @@ check "refused from inside the wrapper's state" has "$out" 'belongs to claude-se
 out=$(cd "$D/secret" && claude 2>&1)
 check "refused from a hidden directory" has "$out" 'is hidden from Claude'
 out=$(cd "$D/.git" && claude 2>&1)
-check "refused from inside the protected repository's .git" has "$out" 'which Claude must not open'
+check "refused from inside the protected repository's .git" has "$out" "lies inside the protected repository $D: run claude from $D"
+mkdir -p "$D/vendor/dep" && git init -q "$D/vendor/dep"
+out=$(cd "$D/vendor/dep" && claude 2>&1)
+check "refused from a repository nested in the protected one" has "$out" "lies inside the protected repository $D"
+rm -rf "$D/vendor"
 # Every other session hides the protected repository by its own rule, not
 # only because it lies in a closed area.
 for f in "$STATE_ROOT"/*/run/srt-settings.json; do

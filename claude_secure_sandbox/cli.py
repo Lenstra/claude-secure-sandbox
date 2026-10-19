@@ -99,7 +99,12 @@ def find_protected_elsewhere(ctx: Context, protected: bool) -> None:
         if nested:
             die(f"protected code in {nested[0]}, inside this repository: run claude from that directory")
     ctx.protected_elsewhere = [r for r in repos if r != ctx.dev_root]
-    closed = ctx.protected_elsewhere + [os.path.join(home, c) for c in access.CREDENTIALS]
+    # Inside a protected repository where git does not find its root (its
+    # .git, a repository nested in it), the session would open it directly.
+    for repo in ctx.protected_elsewhere:
+        if fs_within(repo, ctx.dev_root):
+            die(f"{ctx.dev_root} lies inside the protected repository {repo}: run claude from {repo}")
+    closed = [os.path.join(home, c) for c in access.CREDENTIALS]
     closed += [os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
     for path in closed:
         if fs_within(path, ctx.dev_root):
