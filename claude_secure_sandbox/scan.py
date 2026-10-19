@@ -11,9 +11,11 @@ import os
 import platform
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
-from .common import LEGACY_PROTECT_FILE, SANDBOX_FILE, die, path_within, read_lines, realpath, volume_roots
+from .common import (LEGACY_PROTECT_FILE, SANDBOX_FILE, die, git_env, path_within, read_lines, realpath,
+                     volume_roots)
 from .sandbox_file import Grants
 
 # macOS reaches the data volume through firmlinks; fd reports it under this prefix.
@@ -23,26 +25,27 @@ LOCAL_FILESYSTEMS = {"ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "jfs
                      "vfat", "exfat", "ntfs", "ntfs3", "fuseblk"}
 
 
-def find_sandbox_files(root: str, one_file_system: bool = False, timeout: float = None) -> List[str]:
-    """Every .claudesandbox (and earlier .claudeprotected) under root, a file
-    or a link (fd, else find), skipping .git and node_modules, and with fd
-    ~/Library when root is the home directory (only for speed). Stops the
-    launch if the scan does not finish in time: a repository it did not
-    reach would not be hidden."""
+def find_markers(root: str, one_file_system: bool = False, timeout: float = None) -> List[str]:
+    """Under root: every .claudesandbox (and earlier .claudeprotected), a
+    file or a link, and every .git, whose repository may be protected on a
+    branch not checked out (fd, else find). Never inside .git or
+    node_modules, and with fd not in ~/Library when root is the home
+    directory (only for speed). Stops the launch if the scan does not finish
+    in time: a repository it did not reach would not be hidden."""
     # fd is installed as fdfind on Debian and Ubuntu.
     fd = shutil.which("fd") or shutil.which("fdfind")
     if fd:
-        cmd = [fd, "-H", "-I", "-t", "f", "-t", "l", "--exclude", ".git", "--exclude", "node_modules"]
+        cmd = [fd, "-H", "-I", "-t", "f", "-t", "l", "-t", "d", "--prune", "--exclude", "node_modules"]
         if root == os.environ["HOME"]:
             # Anchored: "Library" alone would skip every directory of that
             # name, and the protected repositories inside.
             cmd += ["--exclude", "/Library"]
         if one_file_system:
             cmd += ["--one-file-system"]
-        cmd += [f"^\\.({SANDBOX_FILE[1:]}|{LEGACY_PROTECT_FILE[1:]})$", root]
+        cmd += [f"^\\.({SANDBOX_FILE[1:]}|{LEGACY_PROTECT_FILE[1:]}|git)$", root]
     else:
         cmd = ["find", root] + (["-xdev"] if one_file_system else []) + [
-            "(", "-name", ".git", "-o", "-name", "node_modules", ")", "-prune", "-o",
+            "-name", "node_modules", "-prune", "-o", "-name", ".git", "-print", "-prune", "-o",
             "(", "-type", "f", "-o", "-type", "l", ")",
             "(", "-name", SANDBOX_FILE, "-o", "-name", LEGACY_PROTECT_FILE, ")", "-print"]
     try:
@@ -57,6 +60,27 @@ def find_sandbox_files(root: str, one_file_system: bool = False, timeout: float 
         if f:
             found.append(f if f.startswith("/") else f"{root}/{f[2:] if f.startswith('./') else f}")
     return found
+
+
+def protected_on_a_branch(repo: str) -> bool:
+    """True if a branch or tag of the repository, checked out or not, has a
+    .claudesandbox (or .claudeprotected) at its root. Only the tips are read,
+    which keeps it fast; a repository that does not answer in time counts
+    as protected."""
+    def git(*args: str, input: str = None) -> str:
+        return subprocess.run(["git", "-C", repo, "-c", "core.fsmonitor=false", *args], input=input,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=git_env(),
+                              encoding="utf-8", errors="surrogateescape", timeout=30).stdout
+    try:
+        tips = sorted(set(git("for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes",
+                              "refs/tags").split()))
+        if not tips:
+            return False
+        out = git("cat-file", "--batch-check",
+                  input="".join(f"{tip}:{name}\n" for tip in tips for name in (SANDBOX_FILE, LEGACY_PROTECT_FILE)))
+    except subprocess.TimeoutExpired:
+        return True
+    return any(line.split(" ")[1:2] == ["blob"] for line in out.splitlines())
 
 
 def protects(directory: str) -> bool:
@@ -86,21 +110,26 @@ def scan_roots() -> List[str]:
 
 
 def scan(state_root: str, roots: List[str]) -> List[str]:
-    """Directories that hold a .claudesandbox (or .claudeprotected), under roots, each scanned
-    without leaving its filesystem; the wrapper's state is left out (its
-    copies hold one too)."""
-    found, seen = set(), set()
+    """Protected repositories under roots, each scanned without leaving its
+    filesystem: those whose .claudesandbox is on disk, and those protected
+    on another branch. The wrapper's state is left out (its copies hold a
+    .claudesandbox too)."""
+    files, repos, seen = set(), set(), set()
     for root in roots:
         real = realpath(root)
         if real in seen or not os.path.isdir(real):
             continue
         seen.add(real)
-        for f in find_sandbox_files(real, one_file_system=True, timeout=600):
+        for f in find_markers(real, one_file_system=True, timeout=600):
             directory = os.path.dirname(f)
             if platform.system() == "Darwin" and directory.startswith(MACOS_DATA + "/"):
                 directory = directory[len(MACOS_DATA):]
             if not path_within(state_root, directory):
-                found.add(directory)
+                (repos if os.path.basename(f) == ".git" else files).add(directory)
+    found = {d for d in files if protects(d)}
+    others = sorted(repos - found)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        found |= {r for r, protected in zip(others, pool.map(protected_on_a_branch, others)) if protected}
     return sorted(found)
 
 
@@ -108,7 +137,7 @@ def protected_repositories(state_root: str, roots: List[str]) -> List[str]:
     """Every protected repository: found under roots now, or used with the
     wrapper before, which covers one where the scan cannot go, and one
     protected with a branch checked out that has no .claudesandbox."""
-    found = {r for r in scan(state_root, roots) if protects(r)}
+    found = set(scan(state_root, roots))
     for marker in glob.glob(os.path.join(state_root, "*", "state", "repository")):
         state = os.path.dirname(marker)
         for repo in read_lines(marker):

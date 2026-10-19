@@ -18,10 +18,11 @@ from typing import List, NoReturn
 
 from . import access, claude_config, filtered_copy, sandbox, scan, session
 from .common import (LEGACY_PROTECT_FILE, NAME, SANDBOX_FILE, Lock, check_deps, check_seccomp, die, find_real_claude,
-                     find_srt, fs_within, git_env, path_within, realpath, state_root, volume_roots, warn)
+                     find_srt, fs_within, git_dev, git_env, path_within, realpath, state_root, volume_roots, warn)
 from .context import Context
 from .sandbox_file import (Grants, confirm_access, confirm_visible, ever_protected, hidden_roots, is_visible,
                            leads_to_visible, read_sandbox_file, visible_hash)
+from .scan import protects
 from .screen import Progress
 
 # Commands that do not open a session: no sandbox.
@@ -80,7 +81,15 @@ def run_in_place(ctx: Context, cwd: str, args: List[str]) -> int:
     return launch(ctx, cwd, args)
 
 
-def find_protected_elsewhere(ctx: Context, protected: bool) -> None:
+def _ancestors(path: str) -> List[str]:
+    """path and every directory above it."""
+    result = [path]
+    while os.path.dirname(result[-1]) != result[-1]:
+        result.append(os.path.dirname(result[-1]))
+    return result
+
+
+def find_protected_elsewhere(ctx: Context, cwd: str, protected: bool) -> None:
     """Every other protected repository is hidden entirely: the whole computer
     is scanned at each launch. CLAUDE_SECURE_SANDBOX_SCAN=limited (tests)
     scans only the home directory and the session's directory. A session
@@ -101,7 +110,11 @@ def find_protected_elsewhere(ctx: Context, protected: bool) -> None:
     ctx.protected_elsewhere = [r for r in repos if r != ctx.dev_root]
     # Inside a protected repository where git does not find its root (its
     # .git, a repository nested in it), the session would open it directly.
-    for repo in ctx.protected_elsewhere:
+    # A repository above that the scan did not report (protected only in
+    # its history, never opened with the wrapper) is checked on every branch.
+    above = [d for d in _ancestors(cwd) if d != ctx.dev_root and os.path.lexists(os.path.join(d, ".git"))
+             and (protects(d) or ever_protected(git_dev(d)))]
+    for repo in ctx.protected_elsewhere + above:
         if fs_within(repo, ctx.dev_root):
             die(f"{ctx.dev_root} lies inside the protected repository {repo}: run claude from {repo}")
     closed = [os.path.join(home, c) for c in access.CREDENTIALS]
@@ -194,7 +207,7 @@ def _main(root: str, args: List[str]) -> int:
     check_seccomp(ctx.srt)
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, _sigterm)
-    find_protected_elsewhere(ctx, protected)
+    find_protected_elsewhere(ctx, cwd, protected)
     # One session per directory: two would share its Claude configuration,
     # which one session's Claude could rig while the other's wrapper syncs it.
     ctx.lock = Lock(ctx.state)

@@ -25,7 +25,7 @@ from claude_secure_sandbox.filtered_copy import parse_raw_log  # noqa: E402
 from claude_secure_sandbox.sandbox_file import (Grants, SandboxFile, confirm_access,  # noqa: E402
                                                 confirm_visible, hidden_roots, is_visible, leads_to_visible,
                                                 normalize_domain, normalize_visible, sparse_escape)
-from claude_secure_sandbox.scan import find_sandbox_files, protected_repositories  # noqa: E402
+from claude_secure_sandbox.scan import protected_on_a_branch, protected_repositories, scan  # noqa: E402
 from claude_secure_sandbox.screen import Progress, estimate  # noqa: E402
 
 
@@ -46,9 +46,9 @@ def _touch(path: str, text: str = "") -> str:
     return path
 
 
-def _git_repo(test: unittest.TestCase):
-    """A new repository, and a function that runs git in it."""
-    repo = _tmp_tree(test)
+def _git_in(repo: str):
+    """A new repository at repo, and a function that runs git in it."""
+    os.makedirs(repo, exist_ok=True)
     env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t",
                GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
 
@@ -56,7 +56,13 @@ def _git_repo(test: unittest.TestCase):
         return subprocess.run(["git", "-C", repo, *args], check=True, stdout=subprocess.PIPE,
                               env=env, encoding="utf-8").stdout.strip()
     git("init", "-q", "-b", "main")
-    return repo, git
+    return git
+
+
+def _git_repo(test: unittest.TestCase):
+    """A new repository in a temporary directory, and a function that runs git in it."""
+    repo = _tmp_tree(test)
+    return repo, _git_in(repo)
 
 
 class _Answers:
@@ -697,14 +703,27 @@ class ScanTest(unittest.TestCase):
         os.symlink(os.path.join(self.home, "p", ".claudesandbox"), os.path.join(self.home, "linked", ".claudesandbox"))
         for d in ("Library/app", "x/node_modules/pkg", "x/.git/y"):
             _touch(os.path.join(self.home, d, ".claudesandbox"))
-        self.expected = {os.path.join(self.home, d) for d in ("p", "work/Library/repo", "a/b/deep", "old", "linked")}
+        # Protected on main, with an older branch checked out: no
+        # .claudesandbox on disk. And a repository that is not protected.
+        for name, protect in (("branchy", True), ("plain", False)):
+            git = _git_in(os.path.join(self.home, name))
+            _touch(os.path.join(self.home, name, "a.txt"), "a")
+            git("add", "-A")
+            git("commit", "-qm", "first")
+            if protect:
+                _touch(os.path.join(self.home, name, ".claudesandbox"), "[allowed-git]\nsrc\n")
+                git("add", "-A")
+                git("commit", "-qm", "protected")
+                git("checkout", "-q", "-b", "old", "HEAD~1")
+        self.expected = {os.path.join(self.home, d)
+                         for d in ("p", "work/Library/repo", "a/b/deep", "old", "linked", "branchy")}
 
     def found(self, tools) -> set:
         real_which = shutil.which
         with mock.patch.dict(os.environ, {"HOME": self.home}), \
                 mock.patch("claude_secure_sandbox.scan.shutil.which",
                            side_effect=lambda t: real_which(t) if t in tools else None):
-            return {os.path.dirname(f) for f in find_sandbox_files(self.home, one_file_system=True)}
+            return set(scan(os.path.join(self.home, "state"), [self.home]))
 
     def test_every_tool_finds_them(self):
         for tools in (("fd", "fdfind"), ()):
@@ -714,8 +733,13 @@ class ScanTest(unittest.TestCase):
                 found = self.found(tools)
                 # A repository in a directory named Library is found: only
                 # ~/Library may be skipped, and only by fd.
-                self.assertTrue(self.expected <= found, found)
-                self.assertFalse({f for f in found if "/node_modules/" in f or "/.git/" in f})
+                # Only fd skips ~/Library, for speed.
+                self.assertEqual(found - {os.path.join(self.home, "Library", "app")}, self.expected)
+
+    def test_protected_on_a_branch(self):
+        self.assertTrue(protected_on_a_branch(os.path.join(self.home, "branchy")))
+        self.assertFalse(protected_on_a_branch(os.path.join(self.home, "plain")))
+        self.assertFalse(protected_on_a_branch(os.path.join(self.home, "x")))
 
     def test_known_repositories_and_state(self):
         state_root = os.path.join(self.home, "state")

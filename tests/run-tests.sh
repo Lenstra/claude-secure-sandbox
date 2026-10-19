@@ -747,6 +747,24 @@ out=$(cd "$COPY/work" && claude 2>&1)
 check "refused from inside the wrapper's state" has "$out" 'belongs to claude-secure-sandbox'
 out=$(cd "$D/secret" && claude 2>&1)
 check "refused from a hidden directory" has "$out" 'is hidden from Claude'
+# Protected on main, an older branch checked out, never opened with the
+# wrapper: no .claudesandbox on disk, still protected.
+B=$T/home/branchy
+git init -q "$B" && (
+  cd "$B" || exit 1
+  echo "BRANCHY-SECRET" > secret.txt && git add -A && git commit -qm first
+  printf '[allowed-git]\nsrc\n' > "$SF" && git add -A && git commit -qm protected
+  git checkout -q -b old HEAD~1
+)
+cat > "$T/fakebin/s-branchy.sh" <<EOF
+name="a repository protected on another branch is unreadable"; tn cat "$B/secret.txt"
+EOF
+( cd "$F" && CS_TEST_SCENARIO=$T/fakebin/s-branchy.sh claude ) < /dev/null > "$T/out/last" 2>&1
+collect
+check "a repository protected on another branch is denied by name" sh -c "jq -e --arg d '$B' '.filesystem.denyRead | index(\$d)' '$STATE_ROOT'/free-*/run/srt-settings.json"
+out=$(cd "$B/.git" && claude 2>&1)
+check "refused from the .git of a repository protected on another branch" has "$out" "lies inside the protected repository $B"
+rm -rf "$B"
 out=$(cd "$D/.git" && claude 2>&1)
 check "refused from inside the protected repository's .git" has "$out" "lies inside the protected repository $D: run claude from $D"
 mkdir -p "$D/vendor/dep" && git init -q "$D/vendor/dep"
