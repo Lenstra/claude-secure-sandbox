@@ -69,10 +69,10 @@ jobs:
     name: End-to-end, Ubuntu 24.04
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      # Tests outside /tmp: the sandbox hides it.
-      TMPDIR: ${{ runner.temp }}
     steps:
+      - name: Tests outside /tmp, which the sandbox hides
+        # The runner context is not available in a job's env.
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
