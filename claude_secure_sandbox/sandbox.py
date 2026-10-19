@@ -25,6 +25,10 @@ from .screen import confirm_session
 LOCKED_GIT_DIRS = ["hooks", "info", "objects/info", "modules", "worktrees"]
 LOCKED_GIT_FILES = ["config", "config.worktree", "commondir", "shallow"]
 LOCKED_GIT_PATHS = LOCKED_GIT_FILES + LOCKED_GIT_DIRS
+# Claude Code's settings in the working directory: permissions and hooks
+# that any Claude Code started there applies, one outside the sandbox too.
+# srt already locks .claude/commands and .claude/agents.
+LOCKED_CLAUDE_FILES = [".claude/settings.json", ".claude/settings.local.json"]
 
 # Files srt always write-protects; on Linux it covers each absent one with
 # /dev/null in every writable directory for the session.
@@ -170,10 +174,14 @@ def _read_rules(ctx: Context) -> Tuple[List[str], List[str]]:
 def _write_rules(ctx: Context) -> Tuple[List[str], List[str]]:
     """(allowWrite, denyWrite). The working directory (unless it holds the
     home directory), the session's temp directory and its Claude
-    configuration; inside, never the copy's .git configuration and hooks,
-    .claudesandbox, the hidden paths, nor a protected repository."""
+    configuration; inside, never the .git configuration and hooks, Claude
+    Code's settings (the directory's and the developer's copy in
+    claude-home), .claudesandbox, the hidden paths, nor a protected
+    repository."""
     allow = ([] if ctx.home_session else [ctx.work]) + [ctx.tmp, ctx.claude_home]
     deny = [] if ctx.home_session else [os.path.join(ctx.copy_git, p) for p in LOCKED_GIT_PATHS]
+    deny += [os.path.join(ctx.work, f) for f in LOCKED_CLAUDE_FILES]
+    deny.append(os.path.join(ctx.claude_home, "settings.json"))
     deny.append(os.path.join(ctx.work, SANDBOX_FILE))
     deny += [os.path.join(ctx.work, p) for p in ctx.hidden]
     deny += [r for r in ctx.protected_elsewhere if path_within(ctx.work, r)]
@@ -183,7 +191,7 @@ def _write_rules(ctx: Context) -> Tuple[List[str], List[str]]:
         # then fails on .git/commondir). The locked directories and the hidden
         # directories are created empty beforehand (git ignores empty
         # directories); the locked files that are absent are checked after the
-        # session instead (neutralize_git_files). A hidden file cannot be
+        # session instead (set_aside_new_locked_files). A hidden file cannot be
         # created (git would see a directory in its place): it stays unlocked,
         # and git refuses to add it. A mount point cannot be renamed or
         # removed, so writable directories need no anchor.
@@ -242,23 +250,32 @@ def own_terminal() -> str:
     return os.ttyname(0)
 
 
-# --- the copy's .git on Linux --------------------------------------------------
+# --- locked files absent at launch, on Linux ----------------------------------
 
 
-def git_files_present(ctx: Context) -> List[str]:
-    return [f for f in LOCKED_GIT_FILES if os.path.lexists(os.path.join(ctx.copy_git, f))]
+def locked_files(ctx: Context) -> List[str]:
+    """Files of the working directory that Claude must not write, whether
+    they exist or not."""
+    if ctx.home_session:
+        return []
+    return ([os.path.join(ctx.copy_git, f) for f in LOCKED_GIT_FILES]
+            + [os.path.join(ctx.work, f) for f in LOCKED_CLAUDE_FILES])
 
 
-def neutralize_git_files(ctx: Context, before: List[str]) -> None:
-    """Linux: a locked .git file that was absent at launch could not be denied
-    (see _write_rules). One that appeared during the session is renamed, so
-    that no git outside the sandbox reads it (.git/commondir would point git
-    at a configuration Claude wrote)."""
+def present(paths: List[str]) -> List[str]:
+    return [p for p in paths if os.path.lexists(p)]
+
+
+def set_aside_new_locked_files(ctx: Context, before: List[str]) -> None:
+    """Linux: a locked file absent at launch could not be denied (see
+    _write_rules). One that appeared during the session is renamed before
+    anything outside the sandbox reads it: .git/commondir would point git at
+    a configuration Claude wrote, .claude/settings.json would give hooks to
+    a Claude Code started there without the sandbox."""
     if platform.system() != "Linux":
         return
-    for name in LOCKED_GIT_FILES:
-        path = os.path.join(ctx.copy_git, name)
-        if name not in before and os.path.lexists(path):
+    for path in present(locked_files(ctx)):
+        if path not in before:
             aside = f"{path}.{NAME}-{stamp()}"
             os.rename(path, aside)
             warn(f"{path} was created during the session: renamed to {aside}")

@@ -56,9 +56,9 @@ def launch(ctx: Context, cwd: str, args: List[str]) -> int:
     try:
         sandbox.write_srt_settings(ctx)
         sandbox.write_system_prompt(ctx)
-        git_files = sandbox.git_files_present(ctx)
+        locked = sandbox.present(sandbox.locked_files(ctx))
         status = sandbox.run_sandboxed(ctx, cwd, args)
-        sandbox.neutralize_git_files(ctx, git_files)
+        sandbox.set_aside_new_locked_files(ctx, locked)
     finally:
         shutil.rmtree(ctx.srt_tmp, ignore_errors=True)
     return status

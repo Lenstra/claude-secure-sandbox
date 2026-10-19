@@ -190,6 +190,7 @@ name="reading ~/.claude transcripts is blocked";       tn cat "$T/home/.claude/p
 name="Claude settings passed through";                 t grep -q dark "\$CLAUDE_CONFIG_DIR/settings.json"
 name="skills passed through";                          t grep -q "demo skill" "\$CLAUDE_CONFIG_DIR/skills/demo/SKILL.md"
 name="~/.claude settings are not writable";            tn sh -c 'echo x >> "\$CLAUDE_CONFIG_DIR/settings.json"'
+name="the session's settings cannot be swapped";       tn sh -c 'rm -f "\$CLAUDE_CONFIG_DIR/settings.json" && echo "{}" > "\$CLAUDE_CONFIG_DIR/settings.json"'
 name="~/.claude skills are not writable";              tn sh -c 'echo x > "\$CLAUDE_CONFIG_DIR/skills/demo/new.md"'
 name="installed plugins are not writable";             tn sh -c 'echo x > "\$CLAUDE_CONFIG_DIR/plugins/marketplaces/demo/new.json"'
 name="synced plugins are the sandbox's own, writable";  t sh -c 'echo x >> "\$CLAUDE_CONFIG_DIR/plugins/synced/org/manifest.json"'
@@ -278,7 +279,7 @@ check "branch claude/main" git -C "$D" rev-parse -q --verify claude/main
 check "a commit referencing hidden content does not break the fetch" git -C "$D" rev-parse -q --verify claude/bad-ref
 check "lock released" test ! -d "$COPY/state/lock"
 check "sessions separate from ~/.claude" test -f "$COPY/claude-home/settings.json"
-check "settings passed through, not copied" test -L "$COPY/claude-home/settings.json"
+check "settings copied into the session, not linked" sh -c "test -f '$COPY/claude-home/settings.json' && test ! -L '$COPY/claude-home/settings.json'"
 check "~/.claude untouched by the session" sh -c "! grep -q x '$T/home/.claude/settings.json' && test ! -e '$T/home/.claude/skills/demo/new.md'"
 check "plugins passed through, except the synced ones" sh -c "test -L '$COPY/claude-home/plugins/marketplaces' && test ! -L '$COPY/claude-home/plugins/synced'"
 check "~/.claude/plugins untouched by the session" sh -c "! grep -q x '$T/home/.claude/plugins/synced/org/manifest.json' && test ! -e '$T/home/.claude/plugins/marketplaces/demo/new.json'"
@@ -652,7 +653,9 @@ name="unprotected: .git/config is not writable";        tn sh -c 'echo x >> "$F/
 name="unprotected: another repository's Claude configuration is unreadable"; tn ls "$COPY/claude-home"
 name="unprotected: another repository's confirmations are not writable"; tn sh -c 'echo "see ." >> "$COPY/state/granted"'
 name="unprotected: its own confirmations are not writable";  tn sh -c 'echo "see ." >> "\$CLAUDE_CONFIG_DIR/../state/granted"'
-
+mkdir -p "$F/.claude" 2>/dev/null
+echo '{"hooks":{}}' > "$F/.claude/settings.json" 2>/dev/null
+echo '{"hooks":{}}' > "$F/.claude/settings.local.json" 2>/dev/null
 name="unprotected: its own Claude configuration";          t sh -c 'case "\$CLAUDE_CONFIG_DIR" in "$STATE_ROOT"/free-*/claude-home) ;; *) exit 1;; esac'
 EOF
 out=$(cd "$F/sub" && CS_TEST_SCENARIO=$T/fakebin/s-dir.sh claude --foo 2>&1 < /dev/null)
@@ -661,6 +664,7 @@ check "repository without .claudesandbox: sandboxed" grep -q "^SANDBOXED cwd=$F/
 check "arguments passed" grep -q -- 'ARGS .*--foo' "$T/out/last"
 collect
 check "Claude's commit is in the repository" sh -c "git -C '$F' log -1 --format=%s | grep -q 'by claude'"
+check "no Claude Code settings written in the directory" sh -c "test ! -e '$F/.claude/settings.json' && test ! -e '$F/.claude/settings.local.json'"
 ( cd "$F" && sleep 3 | claude_in_terminal ) > "$T/out/screen" 2>&1
 check "unprotected screen: the other files are hidden" grep -q "not your other files" "$T/out/screen"
 mkdir -p "$T/home/never-opened" && echo "core" > "$T/home/never-opened/.claudeprotected"

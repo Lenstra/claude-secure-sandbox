@@ -505,7 +505,10 @@ class SandboxRulesTest(unittest.TestCase):
         ctx.protected_elsewhere = [self.other]
         ctx.protected = True
         ctx.hidden, ctx.hidden_dirs = ["core"], ["core"]
-        _touch(os.path.join(ctx.work, ".claudesandbox"))
+        # Present, as srt on Linux only locks what exists (see SetAsideTest).
+        for f in (".claudesandbox", ".claude/settings.json"):
+            _touch(os.path.join(ctx.work, f))
+        _touch(os.path.join(ctx.claude_home, "settings.json"))
         self.ctx = ctx
 
     def rules(self):
@@ -537,6 +540,9 @@ class SandboxRulesTest(unittest.TestCase):
         _, _, allow_write, deny_write = self.rules()
         self.assertEqual(sorted(allow_write), sorted([ctx.work, ctx.tmp, ctx.claude_home]))
         self.assertIn(os.path.join(ctx.work, ".claudesandbox"), deny_write)
+        # Claude Code's settings: permissions and hooks.
+        self.assertIn(os.path.join(ctx.work, ".claude", "settings.json"), deny_write)
+        self.assertIn(os.path.join(ctx.claude_home, "settings.json"), deny_write)
         self.assertIn(os.path.join(ctx.copy_git, "hooks"), deny_write)
         self.assertIn(os.path.join(ctx.work, "core"), deny_write)
 
@@ -558,6 +564,24 @@ class SandboxRulesTest(unittest.TestCase):
         self.assertIn("/usr/bin", env["PATH"].split(":"))
         self.assertNotIn("SSH_AUTH_SOCK", env)
         self.assertEqual(env["CLAUDE_CONFIG_DIR"], ctx.claude_home)
+
+
+class SetAsideTest(unittest.TestCase):
+    def test_new_locked_files_set_aside_on_linux(self):
+        from claude_secure_sandbox.sandbox import locked_files, present, set_aside_new_locked_files
+        work = _tmp_tree(self)
+        ctx = SimpleNamespace(home_session=False, work=work, copy_git=os.path.join(work, ".git"))
+        kept = _touch(os.path.join(work, ".git", "config"))
+        before = present(locked_files(ctx))
+        created = [_touch(os.path.join(work, ".git", "commondir")),
+                   _touch(os.path.join(work, ".claude", "settings.json"))]
+        with mock.patch("platform.system", return_value="Linux"), \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            set_aside_new_locked_files(ctx, before)
+        self.assertTrue(os.path.exists(kept))
+        for path in created:
+            self.assertFalse(os.path.exists(path))
+            self.assertIn(f"{path} was created during the session", err.getvalue())
 
 
 class SeccompTest(unittest.TestCase):

@@ -11,13 +11,13 @@ import shlex
 import shutil
 import subprocess
 
-from .common import (ensure_real_dir, install_file, install_json, load_json, overlaps, path_within, realpath,
-                     regular_file, remove_entry, warn)
+from .common import (ensure_real_dir, install_file, install_json, load_json, overlaps, path_within, read_text,
+                     realpath, regular_file, remove_entry, warn, write_text)
 from .context import Context
 from .screen import session_label
 
-# Items of ~/.claude passed through, read only.
-SYNC = ["settings.json", "CLAUDE.md", "agents", "commands", "skills", "plugins"]
+# Items of ~/.claude passed through, read only (settings.json is copied).
+SYNC = ["CLAUDE.md", "agents", "commands", "skills", "plugins"]
 # Entries of ~/.claude/plugins that Claude Code rewrites itself when it syncs
 # the plugins of claude.ai: the sandbox keeps its own copy of them.
 OWN_PLUGIN_ITEMS = {"synced", "store"}
@@ -37,8 +37,26 @@ def sync_claude_config(ctx: Context) -> None:
     """The sandbox's Claude configuration: the developer's, read only, and
     the parts of ~/.claude.json the session needs."""
     ensure_real_dir(ctx.claude_home)
+    _copy_settings(ctx)
     _link_config_items(ctx)
     _copy_claude_json(ctx)
+
+
+def _copy_settings(ctx: Context) -> None:
+    """~/.claude/settings.json holds the permissions and hooks Claude Code
+    applies: Claude must not swap it during a session. The sandbox locks a
+    copy, refreshed at each launch; a link could be replaced on Linux, where
+    bubblewrap locks the link's target, not the link. An empty one when the
+    developer has none, so that there is a file to lock."""
+    source = os.path.join(os.environ["HOME"], ".claude", "settings.json")
+    try:
+        text = read_text(source) if os.path.isfile(source) else "{}\n"
+    except OSError:
+        warn("cannot read ~/.claude/settings.json")
+        text = "{}\n"
+    tmp = os.path.join(ctx.wtmp, "settings.json")
+    write_text(tmp, text)
+    install_file(tmp, os.path.join(ctx.claude_home, "settings.json"))
 
 
 def _link_config_items(ctx: Context) -> None:
