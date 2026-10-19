@@ -57,21 +57,14 @@ jobs:
       - name: Claude Code's interface reads keys in the sandbox
         run: python3 tests/tui-smoke.py
 
-  debian:
-    name: End-to-end, Debian (Docker)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Lift the host's restriction on user namespaces, which containers share
-        # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor,
-        # in containers too: bubblewrap cannot start, and no session runs.
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: npm run test:linux
-
   ubuntu:
-    name: End-to-end, Ubuntu 24.04
-    runs-on: ubuntu-24.04
+    name: End-to-end, ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # x64 and arm64: srt ships a seccomp helper for each.
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - name: Tests outside /tmp, which the sandbox hides
