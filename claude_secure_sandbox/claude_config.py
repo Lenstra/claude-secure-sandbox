@@ -13,6 +13,7 @@ import subprocess
 
 from .common import (ensure_real_dir, install_file, install_json, load_json, overlaps, path_within, read_text,
                      realpath, regular_file, remove_entry, warn, write_text)
+from .access import CREDENTIALS
 from .context import Context
 from .screen import session_label
 
@@ -65,7 +66,10 @@ def _link_config_items(ctx: Context) -> None:
     from the sandbox, and transcripts stay unreadable. An item that leads to
     a sensitive place is left out."""
     src, dst = os.path.join(os.environ["HOME"], ".claude"), ctx.claude_home
-    sensitive = [ctx.state_root, os.path.join(os.environ["HOME"], ".ssh")]
+    # A link there must not re-open what the sandbox hides.
+    sensitive = list(ctx.protected_elsewhere) + [ctx.state_root]
+    sensitive += [os.path.join(os.environ["HOME"], c) for c in CREDENTIALS]
+    sensitive += [os.path.join(src, item) for item in PRIVATE_CLAUDE_ITEMS]
     if ctx.protected:
         sensitive += [ctx.dev_root, ctx.dev_git_common]
     for item in SYNC:

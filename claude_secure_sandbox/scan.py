@@ -13,7 +13,8 @@ import shutil
 import subprocess
 from typing import List
 
-from .common import LEGACY_PROTECT_FILE, SANDBOX_FILE, path_within, read_lines, realpath, volume_roots
+from .common import LEGACY_PROTECT_FILE, SANDBOX_FILE, die, path_within, read_lines, realpath, volume_roots
+from .sandbox_file import Grants
 
 # macOS reaches the data volume through firmlinks; fd reports it under this prefix.
 MACOS_DATA = "/System/Volumes/Data"
@@ -23,37 +24,33 @@ LOCAL_FILESYSTEMS = {"ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "jfs
 
 
 def find_sandbox_files(root: str, one_file_system: bool = False, timeout: float = None) -> List[str]:
-    """Every .claudesandbox (and earlier .claudeprotected) under root (fd,
-    else rg, else find), skipping .git and node_modules, and with fd
-    ~/Library, when root is the home directory (only for speed)."""
-    home = os.environ["HOME"]
+    """Every .claudesandbox (and earlier .claudeprotected) under root, a file
+    or a link (fd, else find), skipping .git and node_modules, and with fd
+    ~/Library when root is the home directory (only for speed). Stops the
+    launch if the scan does not finish in time: a repository it did not
+    reach would not be hidden."""
     # fd is installed as fdfind on Debian and Ubuntu.
     fd = shutil.which("fd") or shutil.which("fdfind")
     if fd:
-        cmd = [fd, "-H", "-I", "-t", "f", "--exclude", ".git", "--exclude", "node_modules"]
-        if root == home:
+        cmd = [fd, "-H", "-I", "-t", "f", "-t", "l", "--exclude", ".git", "--exclude", "node_modules"]
+        if root == os.environ["HOME"]:
             # Anchored: "Library" alone would skip every directory of that
             # name, and the protected repositories inside.
             cmd += ["--exclude", "/Library"]
         if one_file_system:
             cmd += ["--one-file-system"]
         cmd += [f"^\\.({SANDBOX_FILE[1:]}|{LEGACY_PROTECT_FILE[1:]})$", root]
-    elif shutil.which("rg"):
-        cmd = ["rg", "--files", "--hidden", "--no-ignore", "--no-messages",
-               "-g", SANDBOX_FILE, "-g", LEGACY_PROTECT_FILE, "-g", "!.git", "-g", "!node_modules"]
-        if one_file_system:
-            cmd += ["--one-file-system"]
-        cmd += [root]
     else:
         cmd = ["find", root] + (["-xdev"] if one_file_system else []) + [
-            "(", "-name", ".git", "-o", "-name", "node_modules", ")", "-prune",
-            "-o", "-type", "f", "(", "-name", SANDBOX_FILE, "-o", "-name", LEGACY_PROTECT_FILE, ")", "-print"]
+            "(", "-name", ".git", "-o", "-name", "node_modules", ")", "-prune", "-o",
+            "(", "-type", "f", "-o", "-type", "l", ")",
+            "(", "-name", SANDBOX_FILE, "-o", "-name", LEGACY_PROTECT_FILE, ")", "-print"]
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              encoding="utf-8", errors="surrogateescape", timeout=timeout)
-        output = proc.stdout
-    except subprocess.TimeoutExpired as e:
-        output = e.stdout.decode("utf-8", "surrogateescape") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        output = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, encoding="utf-8",
+                                errors="surrogateescape", timeout=timeout).stdout
+    except subprocess.TimeoutExpired:
+        die(f"the scan of {root} for protected repositories did not finish in {timeout:.0f} s: "
+            "a repository it did not reach would not be hidden")
     found = []
     for f in output.splitlines():
         f = f.rstrip("/")
@@ -109,11 +106,12 @@ def scan(state_root: str, roots: List[str]) -> List[str]:
 
 def protected_repositories(state_root: str, roots: List[str]) -> List[str]:
     """Every protected repository: found under roots now, or used with the
-    wrapper before (in case it sits where the scan cannot go)."""
-    found = set(scan(state_root, roots))
+    wrapper before, which covers one where the scan cannot go, and one
+    protected with a branch checked out that has no .claudesandbox."""
+    found = {r for r in scan(state_root, roots) if protects(r)}
     for marker in glob.glob(os.path.join(state_root, "*", "state", "repository")):
-        try:
-            found.update(read_lines(marker))
-        except OSError:
-            pass
-    return sorted(r for r in found if protects(r))
+        state = os.path.dirname(marker)
+        for repo in read_lines(marker):
+            if protects(repo) or (os.path.isdir(repo) and Grants(state).get("protected")):
+                found.add(repo)
+    return sorted(found)

@@ -4,6 +4,7 @@ import io
 import os
 import platform
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,19 @@ def _touch(path: str, text: str = "") -> str:
     with open(path, "w") as f:
         f.write(text)
     return path
+
+
+def _git_repo(test: unittest.TestCase):
+    """A new repository, and a function that runs git in it."""
+    repo = _tmp_tree(test)
+    env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t",
+               GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+
+    def git(*args):
+        return subprocess.run(["git", "-C", repo, *args], check=True, stdout=subprocess.PIPE,
+                              env=env, encoding="utf-8").stdout.strip()
+    git("init", "-q", "-b", "main")
+    return repo, git
 
 
 class _Answers:
@@ -106,6 +120,7 @@ class NormalizeVisibleTest(unittest.TestCase):
         self.assertEqual(normalize_visible("core/engine"), "core/engine")
         self.assertEqual(normalize_visible("./core//engine/"), "core/engine")
         self.assertEqual(normalize_visible("a/./b"), "a/b")
+        self.assertEqual(normalize_visible(".//src"), "src")
 
     def test_refused(self):
         cases = {
@@ -199,14 +214,7 @@ class ParseRawLogTest(unittest.TestCase):
         """The format the wrapper parses, as this git writes it, through the
         wrapper's own history scan."""
         from claude_secure_sandbox.filtered_copy import _log_hidden_paths
-        repo = _tmp_tree(self)
-        env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
-               "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-
-        def git(*args):
-            return subprocess.run(["git", "-C", repo, *args], check=True, stdout=subprocess.PIPE,
-                                  env=dict(os.environ, **env), encoding="utf-8").stdout.strip()
-        git("init", "-q")
+        repo, git = _git_repo(self)
         _touch(os.path.join(repo, "src", "a.c"), "public")
         _touch(os.path.join(repo, "core", 'quo"te\tx.c'), "SECRET-1")
         git("add", "-A")
@@ -219,6 +227,14 @@ class ParseRawLogTest(unittest.TestCase):
         blobs, paths = parse_raw_log(_log_hidden_paths(ctx, [git("rev-parse", "HEAD")]))
         self.assertEqual(blobs, {secret1, secret2})
         self.assertEqual(paths, {'core/quo"te\tx.c'})
+        # A commit known from an earlier launch, gone since (amended, pruned),
+        # is left out of the walk: git would fail on it.
+        head, gone = git("rev-parse", "HEAD"), "1" * 40
+        self.assertEqual(git_dev(repo).commits([head, gone, secret1]), [head])
+        # The developer's environment does not change which paths are hidden.
+        with mock.patch.dict(os.environ, {"GIT_LITERAL_PATHSPECS": "1", "GIT_ICASE_PATHSPECS": "1"}):
+            self.assertEqual(parse_raw_log(_log_hidden_paths(ctx, [git("rev-parse", "HEAD")]))[0],
+                             {secret1, secret2})
 
 
 # --- confirmations -------------------------------------------------------------
@@ -317,6 +333,40 @@ class ConfirmVisibleTest(unittest.TestCase):
         self.assertEqual(Grants(state).get("unprotected"), [])
 
 
+class EverProtectedTest(unittest.TestCase):
+    def test_older_branch_stays_protected(self):
+        from claude_secure_sandbox.sandbox_file import ever_protected
+        repo, git = _git_repo(self)
+        _touch(os.path.join(repo, "secret.txt"), "SECRET")
+        git("add", "-A")
+        git("commit", "-qm", "before")
+        _touch(os.path.join(repo, ".claudesandbox"), "[allowed-git]\nsrc\n")
+        git("add", "-A")
+        git("commit", "-qm", "protected")
+        git("checkout", "-q", "-b", "old", "HEAD~1")
+        self.assertFalse(os.path.exists(os.path.join(repo, ".claudesandbox")))
+        self.assertTrue(ever_protected(git_dev(repo)))
+
+    def test_scan_keeps_a_protected_repository_without_its_file(self):
+        root = _tmp_tree(self)
+        repo, state_root = os.path.join(root, "repo"), os.path.join(root, "state")
+        os.makedirs(repo)
+        state = os.path.join(state_root, "repo-1", "state")
+        _touch(os.path.join(state, "repository"), repo + "\n")
+        self.assertEqual(protected_repositories(state_root, []), [])
+        Grants(state).set("protected", [""])
+        self.assertEqual(protected_repositories(state_root, []), [repo])
+
+    def test_confirmation_marks_it(self):
+        state = _tmp_tree(self)
+        _Answers(self, "y", "y")
+        confirm_visible(state, _on_disk("[allowed-git]\nsrc\n"), False)
+        self.assertEqual(Grants(state).get("protected"), [""])
+        confirm_visible(state, SandboxFile(), True)
+        self.assertEqual(Grants(state).get("protected"), [])
+        self.assertEqual(Grants(state).get("unprotected"), [""])
+
+
 class ConfirmAccessTest(unittest.TestCase):
     def test_asked_once_and_dropped_with_its_entry(self):
         state = _tmp_tree(self)
@@ -348,6 +398,19 @@ class UrlHostTest(unittest.TestCase):
         self.assertEqual(url_host("ssh://git@git.example.com:2222/repo"), "git.example.com")
         self.assertEqual(url_host("git@gitlab.com:org/repo.git"), "gitlab.com")
         self.assertEqual(url_host("https://user:pw@[::1]:8080/x"), "[::1]")
+        self.assertEqual(url_host("git@[2001:db8::1]:org/x.git"), "[2001:db8::1]")
+        self.assertEqual(url_host("host.example:org/x.git"), "host.example")
+
+    def test_remote_hosts_as_git_resolves_them(self):
+        from claude_secure_sandbox.access import denied_domains
+        repo, git = _git_repo(self)
+        git("config", "url.git@git.corp.example:.insteadOf", "corp:")
+        git("remote", "add", "origin", "corp:team/repo.git")
+        git("remote", "set-url", "--push", "origin", "ssh://push.corp.example/team/repo.git")
+        hosts = denied_domains(SimpleNamespace(git_dev=git_dev(repo)))
+        self.assertIn("git.corp.example", hosts)
+        self.assertIn("push.corp.example", hosts)
+        self.assertNotIn("corp", hosts)
 
     def test_local_paths(self):
         for url in ("/srv/repo.git", "./repo", "../repo", "file:///srv/repo", "repo"):
@@ -378,6 +441,17 @@ class LocalDestinationTest(unittest.TestCase):
                       "::1", "[::1]:8080", "0.0.0.0", "169.254.169.254", "[fe80::1]"):
             with self.subTest(entry=entry):
                 self.assertTrue(local_destination(entry))
+
+    def test_own_interface_address(self):
+        # The address this computer would use to reach the outside; no packet is sent.
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("192.0.2.1", 9))
+                own = s.getsockname()[0]
+        except OSError:
+            self.skipTest("no network interface")
+        self.assertTrue(local_destination(own))
+        self.assertTrue(local_destination(f"{own}:8080"))
 
     def test_other_hosts(self):
         for entry in ("api.anthropic.com", "registry.npmjs.org:443", "*.example.com", "10.0.0.5",
@@ -432,10 +506,12 @@ class CheckAccessTest(unittest.TestCase):
 
     def test_secrets(self):
         home = os.environ["HOME"]
-        for path in (f"{home}/.ssh", f"{home}/.claude", f"{home}/.claude.json", "/tmp",
+        for path in (f"{home}/.ssh", f"{home}/.claude", f"{home}/.claude.json", "/var/tmp",
                      self.ctx.state_root):
             with self.subTest(path=path):
-                self.assertIn("not allowed", self.refused(paths=[path]))
+                # Refused for this very secret, not for an overlap with the
+                # test's own protected repository.
+                self.assertIn(f"overlaps {path}", self.refused(paths=[path]))
 
     def test_developer_repository_when_protected(self):
         self.ctx.protected = True
@@ -583,6 +659,16 @@ class SetAsideTest(unittest.TestCase):
             self.assertFalse(os.path.exists(path))
             self.assertIn(f"{path} was created during the session", err.getvalue())
 
+    def test_never_through_a_link(self):
+        from claude_secure_sandbox.sandbox import set_aside_new_locked_files
+        work, elsewhere = _tmp_tree(self), _tmp_tree(self)
+        victim = _touch(os.path.join(elsewhere, "settings.json"), "{}")
+        os.symlink(elsewhere, os.path.join(work, ".claude"))
+        ctx = SimpleNamespace(home_session=False, work=work, copy_git=os.path.join(work, ".git"))
+        with mock.patch("platform.system", return_value="Linux"):
+            set_aside_new_locked_files(ctx, [])
+        self.assertTrue(os.path.exists(victim))
+
 
 class SeccompTest(unittest.TestCase):
     def test_missing_helper_refused_on_linux(self):
@@ -606,9 +692,12 @@ class ScanTest(unittest.TestCase):
         for d in ("p", "work/Library/repo", "a/b/deep"):
             _touch(os.path.join(self.home, d, ".claudesandbox"))
         _touch(os.path.join(self.home, "old", ".claudeprotected"))
+        # A .claudesandbox that is a link (dotfiles managed elsewhere).
+        os.makedirs(os.path.join(self.home, "linked"))
+        os.symlink(os.path.join(self.home, "p", ".claudesandbox"), os.path.join(self.home, "linked", ".claudesandbox"))
         for d in ("Library/app", "x/node_modules/pkg", "x/.git/y"):
             _touch(os.path.join(self.home, d, ".claudesandbox"))
-        self.expected = {os.path.join(self.home, d) for d in ("p", "work/Library/repo", "a/b/deep", "old")}
+        self.expected = {os.path.join(self.home, d) for d in ("p", "work/Library/repo", "a/b/deep", "old", "linked")}
 
     def found(self, tools) -> set:
         real_which = shutil.which
@@ -618,7 +707,7 @@ class ScanTest(unittest.TestCase):
             return {os.path.dirname(f) for f in find_sandbox_files(self.home, one_file_system=True)}
 
     def test_every_tool_finds_them(self):
-        for tools in (("fd", "fdfind"), ("rg",), ()):
+        for tools in (("fd", "fdfind"), ()):
             if tools and not any(shutil.which(t) for t in tools):
                 continue
             with self.subTest(tools=tools):
@@ -704,6 +793,35 @@ class PathTest(unittest.TestCase):
         self.assertTrue(overlaps("/a", "/a/b"))
         self.assertTrue(overlaps("/a/b", "/a"))
         self.assertFalse(overlaps("/a/b", "/a/bc"))
+
+
+class CaseTest(unittest.TestCase):
+    def test_case_ignored_on_macos_only(self):
+        from claude_secure_sandbox.common import fs_within
+        with mock.patch("platform.system", return_value="Darwin"):
+            self.assertTrue(fs_within("/Users/me/.ssh", "/USERS/me/.SSH/id"))
+            self.assertTrue(overlaps("/Users/me/Work/Repo", "/users/me/work"))
+        with mock.patch("platform.system", return_value="Linux"):
+            self.assertFalse(fs_within("/home/me/.ssh", "/home/me/.SSH/id"))
+
+
+class LockTest(unittest.TestCase):
+    def test_one_session_and_a_stale_lock_taken_over(self):
+        from claude_secure_sandbox.common import Lock
+        state = _tmp_tree(self)
+        first = Lock(state)
+        first.acquire()
+        self.assertEqual(read_text(os.path.join(state, "lock", "pid")), f"{os.getpid()}\n")
+        with mock.patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit):
+            Lock(state).acquire()
+        first.release()
+        # A lock left by a process that is gone.
+        _touch(os.path.join(state, "lock", "pid"), "999999999\n")
+        second = Lock(state)
+        second.acquire()
+        self.assertTrue(second.held)
+        second.release()
+        self.assertEqual(os.listdir(state), [])
 
 
 class LinkSafetyTest(unittest.TestCase):

@@ -61,7 +61,7 @@ MSG
       fi
       mkdir -p "$(dirname "$dest")"
       mv "$ROOT" "$dest"
-      echo "$NAME: moved to $dest (cd $dest in this terminal)"
+      echo "$NAME: moved to $dest (cd \"$dest\" in this terminal)"
       echo
       exec env CLAUDE_SECURE_SANDBOX_MOVED=1 "$dest/install.sh"
     fi
@@ -71,7 +71,8 @@ fi
 (cd "$ROOT" && npm ci --silent)
 chmod +x "$ROOT/bin/claude" "$ROOT/bin/claude-unsandboxed" "$ROOT/libexec/git-remote-csnull"
 
-real=$(command -v claude 2>/dev/null || true)
+# Claude Code itself, not this wrapper when it is already on the PATH.
+real=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$ROOT/bin" | paste -sd: -) command -v claude 2>/dev/null || true)
 
 
 cat <<MSG

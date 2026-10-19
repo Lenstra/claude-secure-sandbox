@@ -13,13 +13,14 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 from typing import List, NoReturn
 
 from . import access, claude_config, filtered_copy, sandbox, scan, session
 from .common import (LEGACY_PROTECT_FILE, NAME, SANDBOX_FILE, Lock, check_deps, check_seccomp, die, find_real_claude,
-                     find_srt, path_within, realpath, state_root, volume_roots, warn)
+                     find_srt, fs_within, git_env, path_within, realpath, state_root, volume_roots, warn)
 from .context import Context
-from .sandbox_file import (confirm_access, confirm_visible, ever_protected, hidden_roots, is_visible,
+from .sandbox_file import (Grants, confirm_access, confirm_visible, ever_protected, hidden_roots, is_visible,
                            leads_to_visible, read_sandbox_file, visible_hash)
 from .screen import Progress
 
@@ -35,8 +36,9 @@ def exec_real(ctx: Context, args: List[str]) -> NoReturn:
 
 def _git_toplevel(cwd: str) -> str:
     proc = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], stdout=subprocess.PIPE,
-                          stderr=subprocess.DEVNULL, encoding="utf-8", errors="surrogateescape")
-    return proc.stdout.strip() if proc.returncode == 0 else ""
+                          stderr=subprocess.DEVNULL, env=git_env(), encoding="utf-8", errors="surrogateescape")
+    # Only the newline: a directory name may end with a space.
+    return proc.stdout.rstrip("\n") if proc.returncode == 0 else ""
 
 
 def _sigterm(*_) -> NoReturn:
@@ -53,15 +55,15 @@ def launch(ctx: Context, cwd: str, args: List[str]) -> int:
     sandbox.write_gitconfig(ctx)
     sandbox.write_tool_links(ctx)
     sandbox.make_srt_tmp(ctx)
+    locked = sandbox.present(sandbox.locked_files(ctx))
     try:
         sandbox.write_srt_settings(ctx)
         sandbox.write_system_prompt(ctx)
-        locked = sandbox.present(sandbox.locked_files(ctx))
-        status = sandbox.run_sandboxed(ctx, cwd, args)
-        sandbox.set_aside_new_locked_files(ctx, locked)
+        return sandbox.run_sandboxed(ctx, cwd, args)
     finally:
+        # Even when the session ends on a signal.
+        sandbox.set_aside_new_locked_files(ctx, locked)
         shutil.rmtree(ctx.srt_tmp, ignore_errors=True)
-    return status
 
 
 def run_in_place(ctx: Context, cwd: str, args: List[str]) -> int:
@@ -73,20 +75,17 @@ def run_in_place(ctx: Context, cwd: str, args: List[str]) -> int:
     home = os.environ["HOME"]
     ctx.home_session = ctx.dev_root == "/" or any(
         path_within(ctx.dev_root, s) for s in [home, os.path.dirname(home)] + volume_roots())
-    ctx.setup_paths()
     ctx.work = ctx.dev_root
     ctx.copy_git = os.path.join(ctx.dev_root, ".git")
-    signal.signal(signal.SIGTERM, _sigterm)
-    try:
-        return launch(ctx, cwd, args)
-    except KeyboardInterrupt:
-        return 130
+    return launch(ctx, cwd, args)
 
 
 def find_protected_elsewhere(ctx: Context, protected: bool) -> None:
     """Every other protected repository is hidden entirely: the whole computer
     is scanned at each launch. CLAUDE_SECURE_SANDBOX_SCAN=limited (tests)
-    scans only the home directory and the session's directory."""
+    scans only the home directory and the session's directory. A session
+    never works inside what it must not open: another protected repository
+    (its .git, for instance), credentials, the developer's Claude data."""
     home = os.environ["HOME"]
     if os.environ.get("CLAUDE_SECURE_SANDBOX_SCAN") == "limited":
         roots = [home] if path_within(home, ctx.dev_root) else [home, ctx.dev_root]
@@ -96,10 +95,15 @@ def find_protected_elsewhere(ctx: Context, protected: bool) -> None:
                       os.path.join(ctx.state_root, "scan-seconds")):
             repos = scan.protected_repositories(ctx.state_root, scan.scan_roots())
     if protected:
-        nested = [r for r in repos if r != ctx.dev_root and path_within(ctx.dev_root, r)]
+        nested = [r for r in repos if r != ctx.dev_root and fs_within(ctx.dev_root, r)]
         if nested:
             die(f"protected code in {nested[0]}, inside this repository: run claude from that directory")
     ctx.protected_elsewhere = [r for r in repos if r != ctx.dev_root]
+    closed = ctx.protected_elsewhere + [os.path.join(home, c) for c in access.CREDENTIALS]
+    closed += [os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
+    for path in closed:
+        if fs_within(path, ctx.dev_root):
+            die(f"{ctx.dev_root} lies in {path}, which Claude must not open: run claude elsewhere")
 
 
 def run_protected(ctx: Context, cwd: str, args: List[str], was_protected: bool) -> int:
@@ -113,7 +117,6 @@ def run_protected(ctx: Context, cwd: str, args: List[str], was_protected: bool) 
         warn("submodules are not supported (v1): their content will be missing from the copy")
     ctx.dev_git_common = common_dir
 
-    ctx.setup_paths()
     protected, ctx.visible = confirm_visible(ctx.state, ctx.sandbox_file, was_protected)
     if not protected:
         return run_in_place(ctx, cwd, args)
@@ -129,34 +132,36 @@ def run_protected(ctx: Context, cwd: str, args: List[str], was_protected: bool) 
             "run claude from a directory Claude can see")
     resume = any(a in RESUME or a.startswith("--resume=") for a in args)
 
-    ctx.lock = Lock(ctx.state)
-    signal.signal(signal.SIGTERM, _sigterm)
-    try:
-        ctx.lock.acquire()
-        if ctx.git_dev.value("status", "--porcelain"):
-            warn("the repository has uncommitted changes: Claude will not see them")
-        filtered_copy.prepare_copy(ctx)
-        session.ensure_dev_remote(ctx)
-        if not session.sync_branches(ctx, new_session=not resume or ctx.fresh_copy):
-            return 0
-        launch_dir = ctx.work
-        if rel and os.path.isdir(os.path.join(ctx.work, rel)):
-            launch_dir = os.path.join(ctx.work, rel)
-        before = session.branch_tips(ctx)
-        status = launch(ctx, launch_dir, args)
-        session.end_of_session(ctx, before)
-        return status
-    except KeyboardInterrupt:
-        return 130
-    finally:
-        ctx.lock.release()
+    if ctx.git_dev.value("status", "--porcelain"):
+        warn("the repository has uncommitted changes: Claude will not see them")
+    filtered_copy.prepare_copy(ctx)
+    session.ensure_dev_remote(ctx)
+    if not session.sync_branches(ctx, new_session=not resume or ctx.fresh_copy):
+        return 0
+    launch_dir = ctx.work
+    if rel and os.path.isdir(os.path.join(ctx.work, rel)):
+        launch_dir = os.path.join(ctx.work, rel)
+    before = session.branch_tips(ctx)
+    status = launch(ctx, launch_dir, args)
+    session.end_of_session(ctx, before)
+    return status
 
 
 def main(root: str, args: List[str]) -> int:
+    try:
+        return _main(root, args)
+    except KeyboardInterrupt:
+        # Ctrl-C or end of input at a question, or during the scan.
+        print(file=sys.stderr)
+        return 130
+
+
+def _main(root: str, args: List[str]) -> int:
     ctx = Context(root, state_root())
     ctx.real_claude = find_real_claude(root) or die("claude binary not found on the PATH")
     if args and args[0] in SESSIONLESS:
         exec_real(ctx, args)
+    check_deps()
     cwd = realpath(os.getcwd())
     # Nothing in the environment can make the wrapper skip the sandbox: a file
     # Claude wrote (an .envrc) could set it. Inside a session, claude on the
@@ -173,15 +178,25 @@ def main(root: str, args: List[str]) -> int:
     if not toplevel and ctx.sandbox_file.exists:
         die(f"{SANDBOX_FILE} protects a git repository, and this directory is not one: "
             "run git init, or remove the file")
-    # A repository that was ever protected stays protected until the
-    # developer confirms otherwise (confirm_visible).
-    was_protected = bool(toplevel) and ever_protected(ctx.git_dev)
+    ctx.setup_paths()
+    # A repository that was ever protected, on any branch, stays protected
+    # until the developer confirms otherwise (confirm_visible), even with a
+    # branch checked out that has no .claudesandbox.
+    was_protected = bool(toplevel) and (ever_protected(ctx.git_dev) or bool(Grants(ctx.state).get("protected")))
     protected = ctx.sandbox_file.exists or was_protected
 
-    check_deps()
     ctx.srt = find_srt(root) or die(f'srt not found: run "npm ci" in {root}')
     check_seccomp(ctx.srt)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _sigterm)
     find_protected_elsewhere(ctx, protected)
-    if protected:
-        return run_protected(ctx, cwd, args, was_protected)
-    return run_in_place(ctx, cwd, args)
+    # One session per directory: two would share its Claude configuration,
+    # which one session's Claude could rig while the other's wrapper syncs it.
+    ctx.lock = Lock(ctx.state)
+    ctx.lock.acquire()
+    try:
+        if protected:
+            return run_protected(ctx, cwd, args, was_protected)
+        return run_in_place(ctx, cwd, args)
+    finally:
+        ctx.lock.release()

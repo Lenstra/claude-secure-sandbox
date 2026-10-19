@@ -62,9 +62,17 @@ def path_within(parent: str, path: str) -> bool:
     return path == parent or path.startswith(parent + "/")
 
 
+def fs_within(parent: str, path: str) -> bool:
+    """path_within for paths on disk. macOS disks usually ignore case:
+    /Users/me/.SSH is ~/.ssh, so the comparison ignores it too."""
+    if platform.system() == "Darwin":
+        parent, path = parent.casefold(), path.casefold()
+    return path_within(parent, path)
+
+
 def overlaps(a: str, b: str) -> bool:
-    """True if one path lies within the other."""
-    return path_within(a, b) or path_within(b, a)
+    """True if one path on disk lies within the other."""
+    return fs_within(a, b) or fs_within(b, a)
 
 
 def expand_home(path: str) -> str:
@@ -77,7 +85,7 @@ def expand_home(path: str) -> str:
 
 
 def stamp() -> str:
-    return time.strftime("%Y-%m-%d-%H%M")
+    return time.strftime("%Y-%m-%d-%H%M%S")
 
 
 def sha1(text: str) -> str:
@@ -241,6 +249,20 @@ class GitError(Exception):
     pass
 
 
+# The only git variables kept from the developer's environment: where their
+# configuration lives. Others would change what the wrapper's git does, as
+# GIT_ICASE_PATHSPECS or GIT_LITERAL_PATHSPECS change which paths the
+# history scan sees as hidden.
+_KEPT_GIT_VARIABLES = {"GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"}
+
+
+def git_env(**extra: str) -> dict:
+    """The environment of the wrapper's git commands."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") or k in _KEPT_GIT_VARIABLES}
+    env.update(extra)
+    return env
+
+
 class Git:
     """A git command line with fixed options and environment."""
 
@@ -249,11 +271,7 @@ class Git:
         self.env = env
 
     def environment(self, extra: Optional[dict]) -> dict:
-        env = dict(os.environ)
-        env.update(self.env)
-        if extra:
-            env.update(extra)
-        return env
+        return git_env(**self.env, **(extra or {}))
 
     def run(self, *args: str, input: Optional[str] = None, quiet: bool = False,
             env: Optional[dict] = None) -> subprocess.CompletedProcess:
@@ -273,6 +291,18 @@ class Git:
         if proc.returncode != 0:
             raise GitError(" ".join(args))
         return proc.stdout[:-1] if proc.stdout.endswith("\n") else proc.stdout
+
+    def commits(self, shas: Iterable[str]) -> List[str]:
+        """The shas that name a commit here. git rev-list and log fail on a
+        missing one read from --stdin, even with --ignore-missing: a commit
+        known from an earlier launch may be gone since (amended, then pruned)."""
+        shas = list(shas)
+        if not shas:
+            return []
+        out = self.run("cat-file", "--batch-check=%(objectname) %(objecttype)", input="".join(s + "\n" for s in shas),
+                       quiet=True).stdout
+        found = {line.split(" ")[0] for line in out.splitlines() if line.endswith(" commit")}
+        return [s for s in shas if s in found]
 
     def ok(self, *args: str, **kw) -> bool:
         return self.run(*args, **kw).returncode == 0
@@ -339,29 +369,35 @@ def _alive(pid: int) -> bool:
 
 
 class Lock:
-    """One session per repository: a directory holding the owner's PID."""
+    """One session per directory: a directory holding the owner's PID."""
 
     def __init__(self, state: str):
         self.path = os.path.join(state, "lock")
         self.held = False
 
     def acquire(self) -> None:
-        try:
-            os.mkdir(self.path)
-        except FileExistsError:
+        # The lock appears with its PID already in it (a directory renamed
+        # into place): another launch never sees it without one.
+        mine = f"{self.path}.{os.getpid()}"
+        shutil.rmtree(mine, ignore_errors=True)
+        os.mkdir(mine)
+        write_text(os.path.join(mine, "pid"), f"{os.getpid()}\n")
+        for _ in range(2):
             try:
-                pid = int(read_text(os.path.join(self.path, "pid")).strip())
-            except (OSError, ValueError):
-                pid = 0
-            if pid and _alive(pid):
-                die(f"a {NAME} session is already running for this repository (pid {pid})")
-            shutil.rmtree(self.path, ignore_errors=True)
-            try:
-                os.mkdir(self.path)
+                os.rename(mine, self.path)
+                self.held = True
+                return
             except OSError:
-                die(f"cannot take the lock {self.path}")
-        write_text(os.path.join(self.path, "pid"), f"{os.getpid()}\n")
-        self.held = True
+                try:
+                    pid = int(read_text(os.path.join(self.path, "pid")).strip())
+                except (OSError, ValueError):
+                    pid = 0
+                if pid and _alive(pid):
+                    shutil.rmtree(mine, ignore_errors=True)
+                    die(f"a {NAME} session is already running for this directory (pid {pid})")
+                shutil.rmtree(self.path, ignore_errors=True)
+        shutil.rmtree(mine, ignore_errors=True)
+        die(f"cannot take the lock {self.path}")
 
     def release(self) -> None:
         if self.held:

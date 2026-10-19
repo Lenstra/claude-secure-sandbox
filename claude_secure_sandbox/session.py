@@ -61,8 +61,8 @@ def branch_tips(ctx: Context) -> Dict[str, str]:
 
 def _count(ctx: Context, include: str, *exclude: str) -> int:
     """Number of commits reachable from include and from none of exclude."""
-    revs = "".join(r + "\n" for r in [include] + ["^" + e for e in exclude])
-    value = ctx.git_copy.value("rev-list", "--count", "--ignore-missing", "--stdin", input=revs)
+    revs = "".join(r + "\n" for r in [include] + ["^" + e for e in ctx.git_copy.commits(exclude)])
+    value = ctx.git_copy.value("rev-list", "--count", "--stdin", input=revs)
     return int(value) if value.isdigit() else 0
 
 
@@ -75,8 +75,9 @@ def _integrated(ctx: Context, sha: str, tip: str) -> bool:
     # it has Claude's commits once they are fetched.
     if not ctx.git_dev.ok("cat-file", "-e", f"{tip}^{{commit}}", quiet=True):
         return False
-    proc = ctx.git_dev.run("rev-list", "--right-only", "--cherry-pick", "--no-merges",
-                           f"{sha}...{tip}", quiet=True)
+    # Merges count too: a merge of Claude's (its conflict resolution) is only
+    # integrated once the developer's commit holds it.
+    proc = ctx.git_dev.run("rev-list", "--right-only", "--cherry-pick", f"{sha}...{tip}", quiet=True)
     return proc.returncode == 0 and not proc.stdout.strip()
 
 
@@ -153,7 +154,10 @@ def sync_branches(ctx: Context, new_session: bool) -> bool:
     refs/incoming at this launch. The branch Claude has checked out is left
     alone when a session is resumed. Returns False if the developer chose to
     quit."""
-    sha = ctx.git_dev.out("rev-parse", "HEAD")
+    # The HEAD fetched at this launch: the developer may have committed since.
+    sha = ctx.git_copy.value("rev-parse", "-q", "--verify", f"{INCOMING}/HEAD^{{commit}}")
+    if not sha:
+        die("the developer's HEAD is missing from the copy")
     current = ctx.git_dev.value("symbolic-ref", "-q", "--short", "HEAD")
     listing = ctx.git_copy.value("for-each-ref", "--format=%(objectname) %(refname)", f"{INCOMING}/heads")
     incoming = {ref[len(INCOMING) + len("/heads/"):]: oid

@@ -7,7 +7,7 @@
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git python3 ripgrep bubblewrap socat jq fd-find openssh-client procps curl \
-      ca-certificates util-linux \
+      ca-certificates util-linux cron at \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -m dev
 USER dev

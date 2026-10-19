@@ -95,6 +95,8 @@ jobs:
           rm "$RUNNER_TEMP/claude"
           if echo "$out" | grep -q CLAUDE-RAN; then echo "Claude ran"; exit 1; fi
           test "$status" -ne 0
+          # Failed for the expected reason, not another one.
+          echo "$out" | grep -Eiq 'bwrap|namespace|uid map|not permitted' 
       - name: Lift the restriction, as the README says
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Claude Code, for the test in a real terminal

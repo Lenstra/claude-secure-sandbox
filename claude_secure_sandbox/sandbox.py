@@ -154,6 +154,9 @@ def _read_rules(ctx: Context) -> Tuple[List[str], List[str]]:
     deny += [os.path.join(ctx.state_root, e) for e in sorted(os.listdir(ctx.state_root))
              if os.path.join(ctx.state_root, e) != ctx.repo_dir]
     deny += [os.path.join(home, ".claude", item) for item in PRIVATE_CLAUDE_ITEMS]
+    # Claude Code's state (account, MCP servers and their tokens): the
+    # session has its own copy of the parts it needs.
+    deny.append(os.path.join(home, ".claude.json"))
     if ctx.protected:
         deny += [ctx.dev_root, ctx.dev_git_common]
     if not ctx.home_session or ctx.protected_code_exists:
@@ -275,7 +278,9 @@ def set_aside_new_locked_files(ctx: Context, before: List[str]) -> None:
     if platform.system() != "Linux":
         return
     for path in present(locked_files(ctx)):
-        if path not in before:
+        # Only through real directories: a .claude or .git that Claude turned
+        # into a link would make the wrapper rename a file elsewhere.
+        if path not in before and realpath(os.path.dirname(path)) == os.path.dirname(path):
             aside = f"{path}.{NAME}-{stamp()}"
             os.rename(path, aside)
             warn(f"{path} was created during the session: renamed to {aside}")
@@ -326,6 +331,10 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
            # srt sets TMPDIR to /tmp/claude, shared by every sandbox: the
            # session's tmp/ instead. The real path of claude: links outside the
            # readable areas do not resolve.
+           # srt runs in the working directory, where its own protections
+           # (.vscode, .mcp.json, .claude/commands...) apply; claude starts
+           # in the developer's subdirectory.
+           "/bin/sh", "-c", 'cd "$1" && shift && exec "$@"', "sh", cwd,
            "/usr/bin/env", f"TMPDIR={ctx.tmp}/", realpath(ctx.real_claude),
            "--settings", claude_settings(ctx),
            "--append-system-prompt-file", os.path.join(ctx.run_dir, "system-prompt.md"), *args]
@@ -343,5 +352,5 @@ def run_sandboxed(ctx: Context, cwd: str, args: List[str]) -> int:
     # session summary. A handler (unlike an ignored signal) is reset in child
     # processes.
     signal.signal(signal.SIGINT, lambda *_: None)
-    status = subprocess.call(cmd, cwd=cwd, env=env)
+    status = subprocess.call(cmd, cwd=ctx.work, env=env)
     return 128 - status if status < 0 else status

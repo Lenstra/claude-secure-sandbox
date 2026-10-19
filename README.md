@@ -148,9 +148,9 @@ registry.npmjs.org
 - **`[allowed-git]`**: the only paths Claude may see in the repository, as committed. Everything else is hidden, including what you add later. Paths are relative to the root; a directory shows everything below it. Literal paths only: no `*`, `?`, `[` or `!`. `.` shows the whole repository; an empty file hides all of it. Without the file, nothing is hidden: Claude works directly in your folder.
 - **`[allowed-external]`**: what Claude may read outside the repository, such as an SDK or a package cache. Absolute or `~/...`, read only.
 - **`[allowed-domain]`**: the network domains Claude may reach beyond Claude's own API and login, such as a package registry. The claude.ai connectors (`mcp-proxy.anthropic.com`) are closed by default: a GitHub connector would read your protected code on GitHub.
+- Lines starting with `#` are comments. A `#` after an entry is part of it: put comments on their own line.
 
 **Only files tracked by git reach Claude.** A `.env`, `node_modules` or a build output never does, even under a listed path, and neither do uncommitted changes. A folder outside git cannot be protected: `git init`, then commit.
-- Lines starting with `#` are comments. A `#` after an entry is part of it: put comments on their own line.
 
 Every section is an allowlist: what is not listed stays closed. The first time an entry appears, the wrapper asks you before Claude starts:
 
@@ -240,4 +240,4 @@ Everything else is in the [architecture document](docs/ARCHITECTURE.md):
 - [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-sessions), and [what Claude can read on your computer](docs/ARCHITECTURE.md#reading-an-allowlist-where-users-files-live);
 - [why there is no configuration file](docs/ARCHITECTURE.md#10-configuration), [troubleshooting](docs/ARCHITECTURE.md#troubleshooting) and [limits](docs/ARCHITECTURE.md#14-limits-and-troubleshooting).
 
-Tests: `npm test` (unit tests, then end-to-end tests in the real sandbox; `jq` required), `npm run test:linux` for the same suite on Linux, in Docker, and `python3 tests/tui-smoke.py` for the real Claude Code in a terminal. The CI runs them all on macOS and Linux.
+Tests: `npm test` (unit tests, then end-to-end tests in the real sandbox; `jq` required), `npm run test:linux` for the same suite on Linux, in Docker, and `python3 tests/tui-smoke.py` for the real Claude Code in a terminal. The CI runs the unit tests, then the end-to-end suite and the terminal test on macOS and on Ubuntu (x64 and arm64).

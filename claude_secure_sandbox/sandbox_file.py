@@ -90,10 +90,10 @@ def normalize_visible(line: str) -> str:
         raise ValueError(f"absolute path not allowed: {line}")
     if any(c in _PATTERN_CHARS for c in line) or line.startswith("!"):
         raise ValueError(f"pattern not supported (literal paths only): {line}")
-    path = line
+    # Slashes first: ".//src" is "src", never "/src".
+    path = re.sub(r"/{2,}", "/", line).rstrip("/")
     while path.startswith("./"):
         path = path[2:]
-    path = re.sub(r"/{2,}", "/", path.rstrip("/"))
     while "/./" in path:
         path = path.replace("/./", "/")
     if path.endswith("/."):
@@ -190,9 +190,10 @@ def sparse_escape(path: str) -> str:
 
 
 def ever_protected(git_dev: Git) -> bool:
-    """True if the file was ever committed in HEAD's history."""
+    """True if the file was ever committed, on any branch: checking out one
+    from before the protection does not lift it."""
     return bool(git_dev.value("-c", "log.showSignature=false", "log", "-1", "--format=%H", "--full-history",
-                              "HEAD", "--", SANDBOX_FILE))
+                              "--all", "--", SANDBOX_FILE))
 
 
 # --- confirmations -------------------------------------------------------------
@@ -201,7 +202,9 @@ def ever_protected(git_dev: Git) -> bool:
 class Grants:
     """What the developer confirmed for a repository, one "<kind> <value>" line
     each in state/granted: "see" ([allowed-git]), "read" ([allowed-external]),
-    "domain" ([allowed-domain]), and "unprotected" once the developer stopped
+    "domain" ([allowed-domain]); "protected" while the repository is, which
+    the machine scan reads too (its .claudesandbox may be absent from the
+    branch checked out), and "unprotected" once the developer stopped
     protecting it. The wrapper's state is out of every sandbox's reach."""
 
     def __init__(self, state: str):
@@ -249,8 +252,10 @@ def confirm_visible(state: str, current: SandboxFile, was_protected: bool) -> Tu
                 f"it stays protected; restore {SANDBOX_FILE} to stop this question",
                 "no terminal to confirm: it stays protected"):
             grants.set("see", [])
+            grants.set("protected", [])
             grants.set("unprotected", [""])
             return False, []
+        grants.set("protected", [""])
         return True, seen
     confirmed = sorted(e for e in current.visible if any(c == "." or path_within(c, e) for c in seen))
     new = sorted(current.visible - set(confirmed))
@@ -260,6 +265,7 @@ def confirm_visible(state: str, current: SandboxFile, was_protected: bool) -> Tu
                     "no terminal to confirm: they stay hidden"):
         confirmed = sorted(confirmed + new)
     grants.set("unprotected", [])
+    grants.set("protected", [""])
     grants.set("see", confirmed)
     return True, confirmed
 

@@ -9,8 +9,8 @@ import stat
 import subprocess
 from typing import List, Set, Tuple
 
-from .common import (EMPTY_BLOB, NULL_OID, PLACEHOLDER_TEXT, SANDBOX_FILE, GitError,
-                     die, log, path_within, read_lines, stamp, warn, write_lines, write_text)
+from .common import (EMPTY_BLOB, NULL_OID, PLACEHOLDER_TEXT, SANDBOX_FILE, GitError, die, git_env, log,
+                     path_within, read_lines, stamp, warn, write_lines, write_text)
 from .context import Context
 from .sandbox_file import hidden_roots, is_visible, sparse_escape
 
@@ -20,6 +20,8 @@ _FILE_MODES = ("100644", "100755", "120000")
 # then updates the copy's branches from them (session.sync_branches), and
 # deletes them.
 INCOMING = "refs/incoming"
+# State that describes the current copy, reset with it.
+COPY_STATE = ("host-tips", "hidden-blobs", "hidden-paths", "dev-tags")
 
 
 # --- fetch from the developer's repository -------------------------------------
@@ -51,9 +53,9 @@ def write_spec(ctx: Context) -> str:
     It is written to a separate repository, added as an alternate for the
     developer's upload-pack: the developer's repository is not modified."""
     spec_git = ctx.state_file("spec.git")
-    env = dict(os.environ, GIT_DIR=spec_git)
+    env = git_env(GIT_DIR=spec_git)
     if not os.path.isdir(spec_git):
-        if subprocess.run(["git", "init", "-q", "--bare", "--template=", spec_git]).returncode:
+        if subprocess.run(["git", "init", "-q", "--bare", "--template=", spec_git], env=git_env()).returncode:
             die(f"init {spec_git}")
     if "." in ctx.visible:
         spec = "/*\n"
@@ -69,7 +71,7 @@ def write_spec(ctx: Context) -> str:
 def init_copy(ctx: Context) -> None:
     shutil.rmtree(ctx.work, ignore_errors=True)
     os.makedirs(ctx.work)
-    env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+    env = git_env(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
     if subprocess.run(["git", "init", "-q", "--template=", ctx.work], env=env).returncode:
         die("git init of the copy")
     for d in ("hooks", "info", "objects/info"):
@@ -95,7 +97,7 @@ def init_copy(ctx: Context) -> None:
     for key, value in settings:
         ctx.git_copy.out("config", key, value)
     write_text(os.path.join(ctx.copy_git, "info", "sparse-checkout"), "/*\n")
-    for f in ("host-tips", "hidden-blobs", "hidden-paths"):
+    for f in COPY_STATE:
         write_text(ctx.state_file(f), "")
 
 
@@ -107,17 +109,22 @@ def fetch_from_dev(ctx: Context) -> List[str]:
     upload_pack = (f"GIT_ALTERNATE_OBJECT_DIRECTORIES='{ctx.state_file('spec.git')}/objects' "
                    "git -c uploadpack.allowFilter=true -c uploadpack.allowAnySHA1InWant=true upload-pack")
     refspecs = "".join(f"+{sha}:{ref}\n" for sha, ref in refs)
+    # Through the environment: "-c key=value" would split a path holding "=".
     ctx.git_copy.out(
-        "-c", f"url.{ctx.dev_root}.insteadOf=csnull::host",
         "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules",
         f"--filter=sparse:oid={ctx.spec}", f"--upload-pack={upload_pack}", "--stdin", "host",
-        input=refspecs)
-    # Delete leftovers and tags that no longer exist on the developer side.
+        input=refspecs, env={"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"url.{ctx.dev_root}.insteadOf",
+                             "GIT_CONFIG_VALUE_0": "csnull::host"})
+    # Delete leftovers, and the developer's tags they no longer have; Claude's
+    # own tags stay.
     wanted = {ref for _, ref in refs}
+    dev_tags = sorted(ref for ref in wanted if ref.startswith("refs/tags/"))
+    earlier = set(read_lines(ctx.state_file("dev-tags")))
     existing = ctx.git_copy.out("for-each-ref", "--format=%(refname)", INCOMING, "refs/tags").splitlines()
-    stale = [ref for ref in existing if ref and ref not in wanted]
+    stale = [ref for ref in existing if ref and ref not in wanted and (ref.startswith(INCOMING) or ref in earlier)]
     if stale:
         ctx.git_copy.out("update-ref", "--stdin", input="".join(f"delete {r}\n" for r in stale))
+    write_lines(ctx.state_file("dev-tags"), dev_tags)
     return tips
 
 
@@ -164,7 +171,8 @@ def scan_hidden_history(ctx: Context, tips: List[str]) -> Set[str]:
     the commits that are new since the last scan, added to
     state/hidden-blobs, and those paths, added to state/hidden-paths.
     Returns the blobs found by this scan."""
-    old = read_lines(ctx.state_file("host-tips"))
+    # Known tips gone since are left out: the walk then only covers more.
+    old = ctx.git_dev.commits(read_lines(ctx.state_file("host-tips")))
     revs = tips + ["^" + t for t in old]
     try:
         raw = _log_hidden_paths(ctx, revs)
@@ -276,6 +284,8 @@ def prepare_copy(ctx: Context) -> None:
     rebuild = ""
     if not os.path.isdir(ctx.copy_git):
         rebuild = "init"
+    elif not old_hash:
+        rebuild = "incomplete"
     elif old_hash != ctx.visible_hash:
         rebuild = "visible-changed"
     elif not check_copy_integrity(ctx):
@@ -285,9 +295,12 @@ def prepare_copy(ctx: Context) -> None:
         "visible-changed": (log, f"the [allowed-git] paths of {SANDBOX_FILE} changed: rebuilding the copy and archiving sessions"),
         "integrity": (warn, "the copy's .git was tampered with: rebuilding"),
         "verify": (warn, "hidden content found in the copy: rebuilding"),
+        "fetch-failed": (warn, "cannot update the copy from the repository: rebuilding"),
+        "incomplete": (warn, "the copy was left incomplete: rebuilding"),
         "init": (log, "creating the filtered copy (first run, may take a while)"),
     }
-    for attempt in (1, 2):
+    failure = ""
+    for _ in (1, 2):
         if rebuild:
             say, message = messages[rebuild]
             say(message)
@@ -298,19 +311,17 @@ def prepare_copy(ctx: Context) -> None:
         try:
             tips = fetch_from_dev(ctx)
         except GitError:
-            tips = None
-        if tips is not None:
-            new = scan_hidden_history(ctx, tips)
-            if remove_hidden_blobs(ctx):
-                install_placeholders(ctx, new)
-                known = set(read_lines(ctx.state_file("host-tips")))
-                write_lines(ctx.state_file("host-tips"), sorted(known | set(tips)))
-                write_text(ctx.state_file("visible-hash"), ctx.visible_hash + "\n")
-                return
-        if attempt == 2:
-            break
-        rebuild = "verify"
-    die("cannot get a copy free of hidden content; session cancelled")
+            failure, rebuild = "cannot fetch the repository into the copy", "fetch-failed"
+            continue
+        new = scan_hidden_history(ctx, tips)
+        if remove_hidden_blobs(ctx):
+            install_placeholders(ctx, new)
+            known = set(read_lines(ctx.state_file("host-tips")))
+            write_lines(ctx.state_file("host-tips"), sorted(known | set(tips)))
+            write_text(ctx.state_file("visible-hash"), ctx.visible_hash + "\n")
+            return
+        failure, rebuild = "cannot get a copy free of hidden content", "verify"
+    die(f"{failure}; session cancelled")
 
 
 def archive_copy(ctx: Context, reason: str) -> None:
@@ -333,7 +344,7 @@ def archive_copy(ctx: Context, reason: str) -> None:
                 os.makedirs(os.path.join(dest, "file-history"), exist_ok=True)
                 os.rename(history, os.path.join(dest, "file-history", sid))
         os.rename(enc, os.path.join(dest, "projects"))
-    for f in ("host-tips", "hidden-blobs", "hidden-paths", "visible-hash"):
+    for f in COPY_STATE + ("visible-hash", "reported-absent"):
         try:
             os.unlink(ctx.state_file(f))
         except FileNotFoundError:
@@ -366,9 +377,9 @@ def claude_branches(ctx: Context) -> List[str]:
 def new_commits(ctx: Context, tip: str) -> List[str]:
     """Commits reachable from tip but not from any commit known to the
     developer, oldest first. Raises GitError."""
-    revs = [tip] + ["^" + t for t in read_lines(ctx.state_file("host-tips"))]
     # A developer commit may be gone from the copy (git gc run by Claude).
-    return ctx.git_copy.out("rev-list", "--topo-order", "--reverse", "--ignore-missing", "--stdin",
+    revs = [tip] + ["^" + t for t in ctx.git_copy.commits(read_lines(ctx.state_file("host-tips")))]
+    return ctx.git_copy.out("rev-list", "--topo-order", "--reverse", "--stdin",
                             input="".join(r + "\n" for r in revs)).split()
 
 

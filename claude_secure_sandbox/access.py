@@ -32,27 +32,28 @@ GIT_HOSTS = [
 
 
 def url_host(url: str) -> str:
-    """Host of a git URL (https://h/x, ssh://u@h:22/x, u@h:x); empty for a local path."""
+    """Host of a git URL (https://h/x, ssh://u@h:22/x, u@h:x, u@[::1]:x);
+    empty for a local path."""
     if "://" in url:
         host = url.split("://", 1)[1].split("/", 1)[0].rsplit("@", 1)[-1]
-        host = host.split("]", 1)[0] + "]" if host.startswith("[") else host.split(":", 1)[0]
-    elif url.startswith(("/", "./", "../", "file:")):
+    elif url.startswith(("/", "./", "../", "file:")) or ":" not in url:
         return ""
-    elif ":" in url:
-        host = url.split(":", 1)[0].rsplit("@", 1)[-1]
     else:
-        return ""
+        user, at, rest = url.partition("@")
+        host = rest if at and ":" not in user else url
+    host = host.split("]", 1)[0] + "]" if host.startswith("[") else host.split(":", 1)[0]
     return host.lower()
 
 
 def denied_domains(ctx: Context) -> List[str]:
-    """The git hosts, and the hosts of the developer's remotes."""
+    """The git hosts, and the hosts of the developer's remotes, as git
+    resolves them (url.<base>.insteadOf applied)."""
     hosts = set(GIT_HOSTS)
-    remotes = ctx.git_dev.value("config", "--get-regexp", r"^remote\..*\.(url|pushurl)$")
-    for line in remotes.splitlines():
-        parts = line.split(" ", 1)
-        if len(parts) == 2 and url_host(parts[1]):
-            hosts.add(url_host(parts[1]))
+    for remote in ctx.git_dev.value("remote").split():
+        for push in ([], ["--push"]):
+            for url in ctx.git_dev.value("remote", "get-url", "--all", *push, remote).splitlines():
+                if url_host(url):
+                    hosts.add(url_host(url))
     return sorted(hosts)
 
 
@@ -96,7 +97,19 @@ def local_destination(entry: str) -> bool:
             return False
     if getattr(address, "ipv4_mapped", None):
         address = address.ipv4_mapped
-    return address.is_loopback or address.is_unspecified or address.is_link_local
+    return address.is_loopback or address.is_unspecified or address.is_link_local or _assigned_here(address)
+
+
+def _assigned_here(address) -> bool:
+    """True if the address is one of this computer's own (192.168.1.10 on its
+    Wi-Fi, for instance): binding a socket to it succeeds only then."""
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as s:
+            s.bind((str(address), 0))
+        return True
+    except OSError:
+        return False
 
 
 # --- paths ---------------------------------------------------------------------

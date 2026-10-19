@@ -36,7 +36,7 @@ check_not() { local name=$1; shift; if "$@" >/dev/null 2>&1; then fail "$name"; 
 section() { printf '\n== %s\n' "$1"; }
 # Collects the IN-OK / IN-FAIL lines printed by a scenario run inside the sandbox.
 collect() {
-  sed -n 's/^IN-OK /  ok    /p' "$T/out/last"
+  sed -n -e 's/^IN-OK /  ok    /p' -e 's/^IN-SKIP /  skip  /p' "$T/out/last"
   PASS=$((PASS + $(grep -c '^IN-OK ' "$T/out/last")))
   grep '^IN-FAIL ' "$T/out/last" | sed 's/^IN-FAIL //' > "$T/out/infail"
   while IFS= read -r n; do [ -n "$n" ] && fail "$n"; done < "$T/out/infail"
@@ -80,6 +80,8 @@ STATE_ROOT=$CLAUDE_SECURE_SANDBOX_HOME
 cat > "$T/fakebin/lib.sh" <<'EOF'
 t()  { if "$@" >/dev/null 2>&1; then echo "IN-OK $name"; else echo "IN-FAIL $name"; fi; }
 tn() { if "$@" >/dev/null 2>&1; then echo "IN-FAIL $name"; else echo "IN-OK $name"; fi; }
+# tn, only when the tool exists: a missing tool proves nothing.
+tn_with() { local tool=$1; shift; if command -v "$tool" >/dev/null 2>&1; then tn "$@"; else echo "IN-SKIP $name ($tool not installed)"; fi; }
 EOF
 cat > "$T/fakebin/claude" <<'EOF'
 #!/bin/bash
@@ -90,6 +92,8 @@ echo "ARGS $*"
 exit 0
 EOF
 chmod +x "$T/fakebin/claude"
+# Connects to a Unix socket by a name relative to a directory.
+printf 'import os, socket, sys\nos.chdir(sys.argv[1])\nsocket.socket(socket.AF_UNIX).connect(sys.argv[2])\n' > "$T/fakebin/unix-connect.py"
 
 # Fake keychain: only Claude Code's login, read from a file.
 cat > "$T/fakebin/security" <<'EOF'
@@ -229,7 +233,7 @@ name="no host/* branches";                            tn sh -c 'git for-each-ref
 for s in $SECRETS; do
   name="no object contains \$s"
   if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file --batch-all-objects --batch-check='%(objectname) %(objecttype)' |
-       awk '\$2=="blob"{print \$1}' | while read o; do GIT_NO_LAZY_FETCH=1 git cat-file -p \$o; done | grep -q "\$s"; then
+       awk '\$2=="blob"{print \$1}' | while read o; do GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file -p \$o; done | grep -q "\$s"; then
     echo "IN-FAIL \$name"; else echo "IN-OK \$name"; fi
   name="no file contains \$s"
   tn grep -rq --exclude-dir=.git "\$s" .
@@ -262,7 +266,7 @@ check "claude runs in the copy" grep -q "^SANDBOXED cwd=$COPY/work" "$T/out/last
 check "system prompt passed" grep -q -- '--append-system-prompt-file' "$T/out/last"
 check "Claude Code's own sandbox disabled" grep -q -- '"sandbox": {"enabled": false}' "$T/out/last"
 check "status line marks the session as sandboxed" grep -q -- '"statusLine".*sandboxed · protected repository repo · main' "$T/out/last"
-check "no banner when the output is not a terminal" sh -c "! grep -q 'sandboxed session' '$T/out/last'"
+check_not "no start screen when the output is not a terminal" grep -q 'Press Enter to start Claude' "$T/out/last"
 collect
 check "visible file with hidden content reported" sh -c "grep -q 'a hidden file has the same content' '$T/out/last' && grep -q '^  src/dup.txt' '$T/out/last'"
 
@@ -337,7 +341,7 @@ name="sandbox Claude configuration is readable";      t cat "$CLAUDE_CONFIG_DIR/
 rm -f "$CLAUDE_CONFIG_DIR/.claude.json" && ln -s "$CS_TEST_SECRET_JSON" "$CLAUDE_CONFIG_DIR/.claude.json"
 name="copy reset to the developer's branch";          t sh -c '[ "$(git rev-parse HEAD)" = "$(cat "$CS_TEST_EXPECTED")" ]'
 name="new visible file from the developer is readable"; t grep -q "public v4" src/b.txt
-name="new secret is absent";                          tn sh -c 'GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file --batch-all-objects --batch-check="%(objectname)" | while read o; do GIT_NO_LAZY_FETCH=1 git cat-file -p $o 2>/dev/null; done | grep -q SECRET-THREE'
+name="new secret is absent";                          tn sh -c 'GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file --batch-all-objects --batch-check="%(objectname)" | while read o; do GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file -p $o 2>/dev/null; done | grep -q SECRET-THREE'
 name="new secret shown as placeholder";               t sh -c 'git show HEAD:secret/s.txt | grep -qF "$CS_TEST_PLACEHOLDER"'
 echo "claude diverges" > src/d.txt
 git add src/d.txt && git commit -qm "claude: diverging work" || echo "IN-FAIL commit diverging work"
@@ -441,7 +445,7 @@ check "file is visible before it is hidden" grep -q '^IN-OK' "$T/out/last"
 )
 cat > "$T/fakebin/s6.sh" <<'EOF'
 if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file --batch-all-objects --batch-check='%(objectname)' |
-   while read o; do GIT_NO_LAZY_FETCH=1 git cat-file -p $o 2>/dev/null; done | grep -q PRIVATE-NEW; then
+   while read o; do GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git cat-file -p $o 2>/dev/null; done | grep -q PRIVATE-NEW; then
   echo "IN-FAIL newly hidden path removed from history"
 else
   echo "IN-OK newly hidden path removed from history"
@@ -482,6 +486,7 @@ collect
 check "confirmation stored in the wrapper's state" grep -qx "see secret" "$COPY/state/granted"
 run_claude "$T/fakebin/s-visible.sh"
 check_not "no question once confirmed" grep -q "could not see before" "$T/out/last"
+collect
 ( cd "$D" && printf '[allowed-git]\nsrc/a.txt\nsrc/dup.txt\nsrc/empty.txt\nlib/deep/public\n' > "$SF" && git commit -qam "hide secret again" )
 run_claude "$T/fakebin/s-hidden.sh"
 collect
@@ -512,29 +517,32 @@ collect
 # --- escape attempts ------------------------------------------------------------------
 
 section "escape attempts: getting a program outside the sandbox to run something"
-SOCK=/tmp/cs-sock.$$
-python3 -c 'import socket, sys, time
-s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); time.sleep(60)' "$SOCK" &
+# The socket lies where the session can read (its own temp directory): only
+# the socket block can stop it. A relative name keeps under the 104-byte limit.
+SOCK=$COPY/tmp/cs.sock
+( cd "$COPY/tmp" && exec python3 -c 'import socket, time
+s = socket.socket(socket.AF_UNIX); s.bind("cs.sock"); s.listen(1); time.sleep(60)' ) &
 sock_pid=$!
 PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
 http_pid=$!
 CRON_BEFORE=$(crontab -l 2>/dev/null)
 sleep 1
+check "the socket answers outside the sandbox" python3 "$T/fakebin/unix-connect.py" "$COPY/tmp" cs.sock
 cat > "$T/fakebin/s-escape.sh" <<EOF
-name="crontab is blocked";                  tn sh -c '(crontab -l 2>/dev/null; echo "# cs-test-escape") | crontab -'
-name="at is blocked";                       tn sh -c 'echo true | at now + 30 minutes'
+name="crontab is blocked";                  tn_with crontab sh -c '(crontab -l 2>/dev/null; echo "# cs-test-escape") | crontab -'
+name="at is blocked";                       tn_with at sh -c 'echo true | at now + 30 minutes'
 if [ "\$(uname)" = Darwin ]; then
 name="launchctl submit is blocked";         tn launchctl submit -l cs-test-escape -- /usr/bin/true
 name="open is blocked";                     tn open -g -j -a Calculator
 name="Apple Events (osascript) are blocked"; tn osascript -e 'with timeout of 5 seconds' -e 'tell application "Finder" to count windows' -e 'end timeout'
 name="the clipboard is blocked";            tn sh -c 'echo cs-test-escape | pbcopy'
 else
-name="systemd-run is blocked";              tn systemd-run --user --quiet /bin/true
-name="xdg-open is blocked";                 tn xdg-open https://example.com
-name="the D-Bus session bus is blocked";    tn sh -c 'test -n "\$DBUS_SESSION_BUS_ADDRESS" && dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames'
+name="systemd-run is blocked";              tn_with systemd-run systemd-run --user --quiet /bin/true
+name="xdg-open is blocked";                 tn_with xdg-open xdg-open https://example.com
+name="the D-Bus session bus is blocked";    [ -n "\$DBUS_SESSION_BUS_ADDRESS" ] || name="\$name, no bus"; tn_with dbus-send sh -c 'test -n "\$DBUS_SESSION_BUS_ADDRESS" && dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames'
 fi
-name="Unix sockets are blocked";            tn python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])' "$SOCK"
+name="Unix sockets are blocked";            tn python3 "$T/fakebin/unix-connect.py" "$COPY/tmp" cs.sock
 name="localhost TCP is blocked";            tn curl -s -m 3 -o /dev/null "http://127.0.0.1:$PORT/"
 # On Linux a read-denied directory is an empty tmpfs: writes there succeed
 # but vanish. What matters is the real file, checked after the session.
@@ -587,8 +595,8 @@ threading.Thread(target=serve, args=(tcp,), daemon=True).start()
 serve(unix)
 PY
 RELAY_PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-RELAY_SOCK=$T/relay.sock
-python3 "$T/relay.py" "$RELAY_PORT" "$RELAY_SOCK" "$D/secret/s.txt" &
+RELAY_SOCK=relay.sock
+( cd "$COPY/tmp" && exec python3 "$T/relay.py" "$RELAY_PORT" "$RELAY_SOCK" "$D/secret/s.txt" ) &
 relay_pid=$!
 sleep 1
 check "the helper serves the protected file outside the sandbox" sh -c "curl -s -m 3 --noproxy '*' http://127.0.0.1:$RELAY_PORT/ | grep -q SECRET-"
@@ -596,13 +604,13 @@ cat > "$T/fakebin/s-relay.sh" <<EOF
 name="relay unreachable through the proxy";          tn sh -c 'curl -s -m 5 http://127.0.0.1:$RELAY_PORT/ | grep -q SECRET-'
 name="relay unreachable through the proxy, by name"; tn sh -c 'curl -s -m 5 http://localhost:$RELAY_PORT/ | grep -q SECRET-'
 name="relay unreachable directly";                   tn sh -c 'curl -s -m 5 --noproxy "*" http://127.0.0.1:$RELAY_PORT/ | grep -q SECRET-'
-name="relay unreachable through its Unix socket";    tn sh -c 'curl -s -m 5 --unix-socket "$RELAY_SOCK" http://x/ | grep -q SECRET-'
+name="relay unreachable through its Unix socket";    tn sh -c 'cd "$COPY/tmp" && curl -s -m 5 --unix-socket "$RELAY_SOCK" http://x/ | grep -q SECRET-'
 name="an allowed domain is reachable through the proxy"; t sh -c '[ "\$(curl -s -m 15 -o /dev/null -w "%{http_code}" https://api.anthropic.com)" != 000 ]'
 EOF
 run_claude "$T/fakebin/s-relay.sh"
 collect
 kill $relay_pid 2>/dev/null; wait $relay_pid 2>/dev/null
-rm -f "$RELAY_SOCK"
+rm -f "$COPY/tmp/$RELAY_SOCK"
 
 if [ "$OS" = Darwin ]; then
 section "terminal: Claude's own only"
@@ -739,6 +747,15 @@ out=$(cd "$COPY/work" && claude 2>&1)
 check "refused from inside the wrapper's state" has "$out" 'belongs to claude-secure-sandbox'
 out=$(cd "$D/secret" && claude 2>&1)
 check "refused from a hidden directory" has "$out" 'is hidden from Claude'
+out=$(cd "$D/.git" && claude 2>&1)
+check "refused from inside the protected repository's .git" has "$out" 'which Claude must not open'
+# Every other session hides the protected repository by its own rule, not
+# only because it lies in a closed area.
+for f in "$STATE_ROOT"/*/run/srt-settings.json; do
+  case "$f" in "$COPY"/*) continue ;; esac
+  jq -e --arg d "$D" '.filesystem.denyRead | index($d)' "$f" >/dev/null || fail "the protected repository is denied in $f"
+done
+ok "other sessions deny the protected repository explicitly"
 mkdir -p "$T/plain/badrepo" && git init -q "$T/plain/badrepo"
 printf '[allowed-git]\n/etc/passwd\n' > "$T/plain/badrepo/$SF"
 out=$(cd "$T/plain/badrepo" && claude 2>&1)
