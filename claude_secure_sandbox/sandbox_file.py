@@ -12,6 +12,7 @@ Claude starts.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 from typing import List, Set, Tuple
@@ -22,6 +23,7 @@ from .common import (SANDBOX_FILE, Git, ask, die, expand_home, log, path_within,
 SECTIONS = ("allowed-git", "allowed-external", "allowed-domain")
 _PATTERN_CHARS = set("*?[\\")
 _DOMAIN = re.compile(r"^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$")
+_IPV6 = re.compile(r"^\[([0-9a-f:.]+)\](:[0-9]{1,5})?$")
 
 
 # --- reading -------------------------------------------------------------------
@@ -130,7 +132,13 @@ def normalize_domain(line: str) -> str:
     domain = line.lower()
     if domain == "*" or domain.startswith("*:"):
         raise ValueError('"*" not allowed')
-    if not _DOMAIN.match(domain) and not domain.startswith("["):
+    if domain.startswith("["):
+        bracketed = _IPV6.match(domain)
+        try:
+            ipaddress.IPv6Address(bracketed.group(1) if bracketed else "")
+        except ValueError:
+            raise ValueError(f"invalid address: {line}") from None
+    elif not _DOMAIN.match(domain):
         raise ValueError(f"invalid domain: {line}")
     return domain
 

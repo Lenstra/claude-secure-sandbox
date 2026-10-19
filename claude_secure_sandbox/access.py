@@ -7,6 +7,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import platform
+import socket
 import subprocess
 from typing import List
 
@@ -87,7 +88,14 @@ def local_destination(entry: str) -> bool:
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
-        return False
+        # The short and numeric forms of IPv4 that resolvers accept: 127.1,
+        # 2130706433, 0x7f.1.
+        try:
+            address = ipaddress.ip_address(socket.inet_aton(host))
+        except OSError:
+            return False
+    if getattr(address, "ipv4_mapped", None):
+        address = address.ipv4_mapped
     return address.is_loopback or address.is_unspecified or address.is_link_local
 
 

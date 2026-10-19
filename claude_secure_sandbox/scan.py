@@ -24,23 +24,23 @@ LOCAL_FILESYSTEMS = {"ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "jfs
 
 def find_sandbox_files(root: str, one_file_system: bool = False, timeout: float = None) -> List[str]:
     """Every .claudesandbox (and earlier .claudeprotected) under root (fd,
-    else rg, else find), skipping .git and node_modules, and ~/Library when
-    root is the home directory."""
+    else rg, else find), skipping .git and node_modules, and with fd
+    ~/Library, when root is the home directory (only for speed)."""
     home = os.environ["HOME"]
     # fd is installed as fdfind on Debian and Ubuntu.
     fd = shutil.which("fd") or shutil.which("fdfind")
     if fd:
         cmd = [fd, "-H", "-I", "-t", "f", "--exclude", ".git", "--exclude", "node_modules"]
         if root == home:
-            cmd += ["--exclude", "Library"]
+            # Anchored: "Library" alone would skip every directory of that
+            # name, and the protected repositories inside.
+            cmd += ["--exclude", "/Library"]
         if one_file_system:
             cmd += ["--one-file-system"]
         cmd += [f"^\\.({SANDBOX_FILE[1:]}|{LEGACY_PROTECT_FILE[1:]})$", root]
     elif shutil.which("rg"):
         cmd = ["rg", "--files", "--hidden", "--no-ignore", "--no-messages",
                "-g", SANDBOX_FILE, "-g", LEGACY_PROTECT_FILE, "-g", "!.git", "-g", "!node_modules"]
-        if root == home:
-            cmd += ["-g", f"!{home}/Library"]
         if one_file_system:
             cmd += ["--one-file-system"]
         cmd += [root]

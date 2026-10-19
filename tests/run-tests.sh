@@ -722,6 +722,15 @@ check "from /: session started, read only" grep -q -- "^SANDBOXED cwd=/$" "$T/ou
 collect
 out=$(cd "$D" && claude --version 2>&1)
 check "--version without sandbox" has "$out" '^UNSANDBOXED --version'
+cat > "$T/fakebin/s-planted.sh" <<EOF
+name="a planted CLAUDE_SECURE_SANDBOX_ACTIVE skips nothing"; tn cat "$T/home/.ssh/id_test"
+name="a nested claude is the real one, confined";          t sh -c 'CS_TEST_SCENARIO= claude --nested | grep -q "^ARGS --nested"'
+name="the wrapper is not on the session's PATH";           tn sh -c 'command -v claude | grep -q "^$ROOT/bin/"'
+EOF
+( cd "$F" && CLAUDE_SECURE_SANDBOX_ACTIVE=1 CS_TEST_SCENARIO=$T/fakebin/s-planted.sh claude ) < /dev/null > "$T/out/last" 2>&1
+collect
+out=$(cd "$COPY/work" && claude 2>&1)
+check "refused from inside the wrapper's state" has "$out" 'belongs to claude-secure-sandbox'
 out=$(cd "$D/secret" && claude 2>&1)
 check "refused from a hidden directory" has "$out" 'is hidden from Claude'
 mkdir -p "$T/plain/badrepo" && git init -q "$T/plain/badrepo"

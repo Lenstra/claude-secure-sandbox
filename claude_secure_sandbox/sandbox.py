@@ -270,17 +270,22 @@ def neutralize_git_files(ctx: Context, before: List[str]) -> None:
 def _sandbox_env(ctx: Context) -> dict:
     """The environment of Claude Code in the sandbox."""
     env = dict(os.environ)
+    # Without the wrapper: a claude started in the session is the real one,
+    # already confined.
+    wrapper = realpath(os.path.join(ctx.root, "bin"))
+    path = [d for d in env.get("PATH", "").split(":") if realpath(d or ".") != wrapper]
     env.update({
         "CLAUDE_CONFIG_DIR": ctx.claude_home,
         "GIT_CONFIG_GLOBAL": os.path.join(ctx.run_dir, "gitconfig"),
         "GIT_CONFIG_NOSYSTEM": "1",
-        "PATH": ":".join([os.path.join(ctx.root, "libexec"), os.path.join(ctx.run_dir, "bin"), env.get("PATH", "")]),
+        "PATH": ":".join([os.path.join(ctx.root, "libexec"), os.path.join(ctx.run_dir, "bin"), *path]),
         # Claude Code's own temp root, /tmp by default, which is unreadable.
         "CLAUDE_CODE_TMPDIR": ctx.tmp,
         "DISABLE_AUTOUPDATER": "1",
         # Plugins and skills synced from claude.ai: Claude Code turns their
         # sync off with a configuration directory of its own, unless asked.
         "CLAUDE_CODE_SYNC_PLUGINS": "1",
+        # For scripts that want to know; the wrapper itself never trusts it.
         "CLAUDE_SECURE_SANDBOX_ACTIVE": "1",
     })
     # Package manager caches, in the home directory by default, which is

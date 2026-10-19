@@ -17,7 +17,7 @@ import sys
 from typing import List, NoReturn
 
 from . import access, claude_config, filtered_copy, sandbox, scan, session
-from .common import (LEGACY_PROTECT_FILE, SANDBOX_FILE, Lock, check_deps, check_seccomp, die, find_real_claude,
+from .common import (LEGACY_PROTECT_FILE, NAME, SANDBOX_FILE, Lock, check_deps, check_seccomp, die, find_real_claude,
                      find_srt, log, path_within, realpath, state_root, volume_roots, warn)
 from .context import Context
 from .sandbox_file import (confirm_access, confirm_visible, ever_protected, hidden_roots, is_visible,
@@ -158,9 +158,11 @@ def main(root: str, args: List[str]) -> int:
     if args and args[0] in SESSIONLESS:
         exec_real(ctx, args)
     cwd = realpath(os.getcwd())
-    # Already inside a sandbox, or inside a copy: nothing more to filter.
-    if os.environ.get("CLAUDE_SECURE_SANDBOX_ACTIVE") or path_within(ctx.state_root, cwd):
-        exec_real(ctx, args)
+    # Nothing in the environment can make the wrapper skip the sandbox: a file
+    # Claude wrote (an .envrc) could set it. Inside a session, claude on the
+    # PATH is the real binary (sandbox._sandbox_env), already confined.
+    if path_within(ctx.state_root, cwd):
+        die(f"{cwd} belongs to {NAME}: run claude from your own directory")
 
     toplevel = _git_toplevel(cwd)
     ctx.dev_root = realpath(toplevel) if toplevel else cwd

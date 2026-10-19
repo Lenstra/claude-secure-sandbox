@@ -132,10 +132,31 @@ def _log_hidden_paths(ctx: Context, revs: List[str]) -> str:
         return ""
     specs = [":/"] + [f":(top,exclude,literal){p}" for p in [SANDBOX_FILE] + ctx.visible]
     return ctx.git_dev.out(
-        "-c", "diff.renames=false", "-c", "log.showSignature=false", "-c", "core.quotePath=false",
-        "log", "--stdin", "--format=", "--raw", "--no-abbrev", "--no-renames", "--root",
+        "-c", "diff.renames=false", "-c", "log.showSignature=false",
+        "log", "--stdin", "--format=", "--raw", "-z", "--no-abbrev", "--no-renames", "--root",
         "--full-history", "--diff-merges=first-parent", "--no-ext-diff", "--", *specs,
         input="".join(r + "\n" for r in revs))
+
+
+def parse_raw_log(raw: str) -> Tuple[Set[str], Set[str]]:
+    """(blobs, paths) of git log --raw -z --no-renames: each change is
+    ":<old mode> <new mode> <old oid> <new oid> <status>", then its path,
+    each followed by a NUL. Both sides of a change count; a submodule (mode
+    160000) or an absent side is not a blob."""
+    blobs, paths = set(), set()
+    fields = iter(raw.split("\0"))
+    for meta in fields:
+        meta = meta.lstrip("\n")
+        if not meta.startswith(":"):
+            continue
+        # Read in pairs: a path that starts with ":" is never taken for a change.
+        paths.add(next(fields))
+        old_mode, new_mode, old_oid, new_oid = meta[1:].split(" ")[:4]
+        if old_mode in _FILE_MODES:
+            blobs.add(old_oid)
+        if new_mode in _FILE_MODES:
+            blobs.add(new_oid)
+    return blobs - {NULL_OID, EMPTY_BLOB}, paths
 
 
 def scan_hidden_history(ctx: Context, tips: List[str]) -> Set[str]:
@@ -149,19 +170,7 @@ def scan_hidden_history(ctx: Context, tips: List[str]) -> Set[str]:
         raw = _log_hidden_paths(ctx, revs)
     except GitError:
         die("cannot scan the developer's history")
-    found, paths = set(), set()
-    for line in raw.splitlines():
-        if not line.startswith(":"):
-            continue
-        meta, _, path = line.partition("\t")
-        paths.add(path)
-        fields = meta.split()
-        old_mode, new_mode, old_oid, new_oid = fields[0][1:], fields[1], fields[2], fields[3]
-        if old_mode in _FILE_MODES:
-            found.add(old_oid)
-        if new_mode in _FILE_MODES:
-            found.add(new_oid)
-    found -= {NULL_OID, EMPTY_BLOB}
+    found, paths = parse_raw_log(raw)
     known = set(read_lines(ctx.state_file("hidden-blobs")))
     write_lines(ctx.state_file("hidden-blobs"), sorted(known | found))
     known_paths = set(read_lines(ctx.state_file("hidden-paths")))
