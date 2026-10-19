@@ -154,7 +154,7 @@ git log --oneline feature-x..claude/feature-x
 git diff feature-x...claude/feature-x
                                                 # 4. bring them into your branch, either:
 git rebase claude/feature-x                     #    if you do not sign your commits
-git cherry-pick -S feature-x..claude/feature-x  #    if you sign your commits
+git cherry-pick -S --no-merges feature-x..claude/feature-x  #    if you sign your commits
 git push origin feature-x                       # 5. push, then open a pull request
 claude                                          # 6. next session, from your latest commit
 ```
@@ -165,13 +165,13 @@ claude                                          # 6. next session, from your lat
    ```
    claude-secure-sandbox: end of session
      feature-x: 3 new commit(s)
-     next: git fetch claude, then on feature-x: git cherry-pick -S feature-x..claude/feature-x
+     next: git fetch claude, then on feature-x: git cherry-pick -S --no-merges feature-x..claude/feature-x
    ```
 
 3. **Fetch and review.** The `claude` remote was added to your repository at the first launch; it points to Claude's copy, and push to it is disabled.
 4. **Integrate.** Two cases, depending on whether you sign your commits:
    - **You do not sign them:** `git rebase claude/feature-x`. If you have not committed on `feature-x` in the meantime, your branch simply moves forward to Claude's last commit; otherwise your new commits are replayed after Claude's.
-   - **You sign them:** your signing key never enters the sandbox, so Claude's commits are unsigned. `git cherry-pick -S feature-x..claude/feature-x` copies Claude's commits that are not in your branch yet after your latest commit, and signs each copy. It never rewrites a commit you already have, pushed or not.
+   - **You sign them:** your signing key never enters the sandbox, so Claude's commits are unsigned. `git cherry-pick -S --no-merges feature-x..claude/feature-x` copies Claude's commits that are not in your branch yet after your latest commit, and signs each copy. It never rewrites a commit you already have, pushed or not.
 
    In both cases there is no merge commit; resolve conflicts, if any, as usual with git.
 5. **Push.** History on `origin` stays linear, without merge commits. With the rebase, commits of yours that were already pushed and come after Claude's are rewritten: push them with `--force-with-lease`. The cherry-pick never rewrites anything, so its push is always a normal one. CI builds and tests with the full code, hidden paths included.

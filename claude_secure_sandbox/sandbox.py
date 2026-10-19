@@ -8,14 +8,15 @@ import platform
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 from typing import List, Tuple
 
-from .access import (CREDENTIALS, TEMP_DIRS, USER_AREAS, allowed_domains, denied_domains, path_tools,
+from .access import (TEMP_DIRS, USER_AREAS, allowed_domains, credential_paths, denied_domains, path_tools,
                      user_temp_dirs)
 from .claude_config import PRIVATE_CLAUDE_ITEMS, claude_settings
-from .common import (NAME, PLACEHOLDER_TEXT, SANDBOX_FILE, die, ensure_real_dir, log, overlaps, path_within,
+from .common import (NAME, PLACEHOLDER_TEXT, SANDBOX_FILE, command_output, die, ensure_real_dir, log, overlaps, path_within,
                      read_text, realpath, stamp, volume_roots, warn, write_text)
 from .context import Context
 from .screen import confirm_session
@@ -74,9 +75,7 @@ def write_tool_links(ctx: Context) -> None:
         os.unlink(target)
     if platform.system() != "Darwin" or realpath(shutil.which("git") or "") != "/usr/bin/git":
         return
-    proc = subprocess.run(["xcrun", "-f", "git"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          encoding="utf-8")
-    real = proc.stdout.strip() if proc.returncode == 0 else ""
+    real = (command_output(["xcrun", "-f", "git"]) or "").strip()
     if real and os.access(real, os.X_OK) and real != "/usr/bin/git":
         write_text(target, f"#!/bin/sh\nexec {shlex.quote(real)} \"$@\"\n")
         os.chmod(target, 0o755)
@@ -95,7 +94,7 @@ def write_system_prompt(ctx: Context) -> None:
     else:
         access = "You work directly in this directory, and can read and write it:"
         read = ("Outside this directory, you can read the system and the developer's tools (the directories on "
-                "the PATH), and the paths the developer opened in `.claudesandbox`. The developer's other files, "
+                f"the PATH), and the paths the developer opened in `{SANDBOX_FILE}`. The developer's other files, "
                 "other disks and temp directories are hidden, by design.")
     template = (template.replace("@PLACEHOLDER@", PLACEHOLDER_TEXT).replace("@SANDBOX_FILE@", SANDBOX_FILE)
                 .replace("@ROOT@", ctx.work).replace("@ACCESS@", access).replace("@READ@", read))
@@ -127,9 +126,7 @@ def _claude_install_dir(ctx: Context) -> str:
     claude_dir = os.path.dirname(realpath(ctx.real_claude))
     if path_within(f"{home}/.claude/local", claude_dir):
         return f"{home}/.claude/local"
-    sensitive = [ctx.state_root, f"{home}/.ssh", f"{home}/.claude", f"{home}/.claude.json"]
-    if ctx.protected:
-        sensitive += [ctx.dev_root, ctx.dev_git_common]
+    sensitive = ctx.protected_code + [ctx.state_root, f"{home}/.claude", f"{home}/.claude.json"] + credential_paths()
     for path in sensitive:
         if overlaps(path, claude_dir):
             die(f"the claude binary ({claude_dir}) is inside a sensitive area ({path})")
@@ -150,17 +147,15 @@ def _read_rules(ctx: Context) -> Tuple[List[str], List[str]]:
     readable; credentials and temp directories are then hidden only when
     protected code exists on the computer."""
     home = os.environ["HOME"]
-    deny = [ctx.state, ctx.archive] + ctx.protected_elsewhere
+    deny = [ctx.state, ctx.archive] + ctx.protected_code
     deny += [os.path.join(ctx.state_root, e) for e in sorted(os.listdir(ctx.state_root))
              if os.path.join(ctx.state_root, e) != ctx.repo_dir]
     deny += [os.path.join(home, ".claude", item) for item in PRIVATE_CLAUDE_ITEMS]
     # Claude Code's state (account, MCP servers and their tokens): the
     # session has its own copy of the parts it needs.
     deny.append(os.path.join(home, ".claude.json"))
-    if ctx.protected:
-        deny += [ctx.dev_root, ctx.dev_git_common]
     if not ctx.home_session or ctx.protected_code_exists:
-        deny += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + user_temp_dirs()
+        deny += credential_paths() + TEMP_DIRS + user_temp_dirs()
     if not ctx.home_session:
         deny += [home] + USER_AREAS.get(platform.system(), []) + volume_roots()
     deny = [d for d in deny if os.path.lexists(d)]
@@ -278,12 +273,20 @@ def set_aside_new_locked_files(ctx: Context, before: List[str]) -> None:
     if platform.system() != "Linux":
         return
     for path in present(locked_files(ctx)):
+        parent = os.path.dirname(path)
         # Only through real directories: a .claude or .git that Claude turned
         # into a link would make the wrapper rename a file elsewhere.
-        if path not in before and realpath(os.path.dirname(path)) == os.path.dirname(path):
-            aside = f"{path}.{NAME}-{stamp()}"
+        if path in before or realpath(parent) != parent:
+            continue
+        aside = f"{path}.{NAME}-{stamp()}"
+        try:
+            # Claude may have taken the write permission off the directory.
+            os.chmod(parent, os.stat(parent).st_mode | stat.S_IWUSR | stat.S_IXUSR)
             os.rename(path, aside)
             warn(f"{path} was created during the session: renamed to {aside}")
+        except OSError as e:
+            warn(f"{path} was created during the session and cannot be renamed ({e.strerror}): "
+                 "remove it before running git or Claude Code there")
 
 
 # --- launch --------------------------------------------------------------------

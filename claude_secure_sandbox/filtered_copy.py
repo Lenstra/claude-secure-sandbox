@@ -6,10 +6,9 @@ import glob
 import os
 import shutil
 import stat
-import subprocess
-from typing import List, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
-from .common import (EMPTY_BLOB, NULL_OID, PLACEHOLDER_TEXT, SANDBOX_FILE, GitError, die, git_env, log,
+from .common import (EMPTY_BLOB, NULL_OID, PLACEHOLDER_TEXT, SANDBOX_FILE, Git, GitError, die, log,
                      path_within, read_lines, stamp, warn, write_lines, write_text)
 from .context import Context
 from .sandbox_file import hidden_roots, is_visible, sparse_escape
@@ -53,26 +52,24 @@ def write_spec(ctx: Context) -> str:
     It is written to a separate repository, added as an alternate for the
     developer's upload-pack: the developer's repository is not modified."""
     spec_git = ctx.state_file("spec.git")
-    env = git_env(GIT_DIR=spec_git)
-    if not os.path.isdir(spec_git):
-        if subprocess.run(["git", "init", "-q", "--bare", "--template=", spec_git], env=git_env()).returncode:
-            die(f"init {spec_git}")
+    git = Git([], {"GIT_DIR": spec_git})
     if "." in ctx.visible:
         spec = "/*\n"
     else:
         spec = "".join(f"/{sparse_escape(p)}\n" for p in [SANDBOX_FILE] + ctx.visible)
-    proc = subprocess.run(["git", "hash-object", "-w", "--stdin"], input=spec, env=env,
-                          stdout=subprocess.PIPE, encoding="utf-8")
-    if proc.returncode:
+    try:
+        if not os.path.isdir(spec_git):
+            git.out("init", "-q", "--bare", "--template=")
+        return git.out("hash-object", "-w", "--stdin", input=spec)
+    except GitError:
         die("cannot write the sparse filter")
-    return proc.stdout.strip()
 
 
 def init_copy(ctx: Context) -> None:
     shutil.rmtree(ctx.work, ignore_errors=True)
     os.makedirs(ctx.work)
-    env = git_env(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
-    if subprocess.run(["git", "init", "-q", "--template=", ctx.work], env=env).returncode:
+    if not Git([], {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}).ok("init", "-q", "--template=",
+                                                                                       ctx.work):
         die("git init of the copy")
     for d in ("hooks", "info", "objects/info"):
         os.makedirs(os.path.join(ctx.copy_git, d), exist_ok=True)
@@ -119,9 +116,12 @@ def fetch_from_dev(ctx: Context) -> List[str]:
     # own tags stay.
     wanted = {ref for _, ref in refs}
     dev_tags = sorted(ref for ref in wanted if ref.startswith("refs/tags/"))
-    earlier = set(read_lines(ctx.state_file("dev-tags")))
+    known = ctx.state_file("dev-tags")
+    # Unknown (a copy made before this record): every tag counts as the developer's.
+    earlier = set(read_lines(known)) if os.path.exists(known) else None
     existing = ctx.git_copy.out("for-each-ref", "--format=%(refname)", INCOMING, "refs/tags").splitlines()
-    stale = [ref for ref in existing if ref and ref not in wanted and (ref.startswith(INCOMING) or ref in earlier)]
+    stale = [ref for ref in existing if ref and ref not in wanted
+             and (ref.startswith(INCOMING) or earlier is None or ref in earlier)]
     if stale:
         ctx.git_copy.out("update-ref", "--stdin", input="".join(f"delete {r}\n" for r in stale))
     write_lines(ctx.state_file("dev-tags"), dev_tags)
@@ -283,7 +283,8 @@ def prepare_copy(ctx: Context) -> None:
     old_hash = "".join(read_lines(ctx.state_file("visible-hash")))
     rebuild = ""
     if not os.path.isdir(ctx.copy_git):
-        rebuild = "init"
+        # Without a copy, the sessions of an earlier [allowed-git] remain.
+        rebuild = "visible-changed" if old_hash and old_hash != ctx.visible_hash else "init"
     elif not old_hash:
         rebuild = "incomplete"
     elif old_hash != ctx.visible_hash:
@@ -360,12 +361,16 @@ def claude_project_dir(ctx: Context) -> str:
     return os.path.join(ctx.claude_home, "projects", encoded)
 
 
+def branch_tips(ctx: Context) -> Dict[str, str]:
+    """The copy's branches and their tips."""
+    listing = ctx.git_copy.value("for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads")
+    return {b: t for t, _, b in (line.partition(" ") for line in listing.splitlines()) if b}
+
+
 def claude_branches(ctx: Context) -> List[str]:
     """Branches of the copy holding commits the developer does not have."""
     result = []
-    listing = ctx.git_copy.value("for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads")
-    for line in listing.splitlines():
-        tip, _, branch = line.partition(" ")
+    for branch, tip in sorted(branch_tips(ctx).items()):
         try:
             if new_commits(ctx, tip):
                 result.append(branch)

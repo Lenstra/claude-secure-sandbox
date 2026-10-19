@@ -82,6 +82,14 @@ class _Answers:
         return self.answers.pop(0)
 
 
+def _context(state_root: str, root: str = "", **attributes) -> Context:
+    """A Context with the given attributes, as a launch would set them."""
+    ctx = Context(root, state_root)
+    for name, value in attributes.items():
+        setattr(ctx, name, value)
+    return ctx
+
+
 def _on_disk(content: str) -> SandboxFile:
     """A .claudesandbox read from disk, which protects its repository."""
     f = SandboxFile(content)
@@ -342,7 +350,7 @@ class ConfirmVisibleTest(unittest.TestCase):
 
 class EverProtectedTest(unittest.TestCase):
     def test_older_branch_stays_protected(self):
-        from claude_secure_sandbox.sandbox_file import ever_protected
+        from claude_secure_sandbox.scan import ever_protected
         repo, git = _git_repo(self)
         _touch(os.path.join(repo, "secret.txt"), "SECRET")
         git("add", "-A")
@@ -361,7 +369,7 @@ class EverProtectedTest(unittest.TestCase):
         self.assertTrue(ever_protected(repo))
 
     def test_unreadable_repository_counts_as_protected(self):
-        from claude_secure_sandbox.sandbox_file import ever_protected
+        from claude_secure_sandbox.scan import ever_protected
         repo, git = _git_repo(self)
         self.assertFalse(ever_protected(repo))
         # A ref to an object that does not exist: git log --all fails.
@@ -480,9 +488,7 @@ class CheckAccessTest(unittest.TestCase):
         os.symlink(self.protected, os.path.join(self.tmp, "link"))
         here, git = _git_repo(self)
         git("remote", "add", "origin", "git@git.corp.example:org/repo.git")
-        self.ctx = SimpleNamespace(git_dev=git_dev(here), protected_elsewhere=[self.protected], protected=False,
-                                   dev_root=here, dev_git_common="",
-                                   state_root=os.path.join(self.tmp, "state"))
+        self.ctx = _context(os.path.join(self.tmp, "state"), dev_root=here, protected_elsewhere=[self.protected])
 
     def refused(self, paths=(), domains=()) -> str:
         with mock.patch("sys.stderr", new_callable=io.StringIO) as err, self.assertRaises(SystemExit):
@@ -525,8 +531,8 @@ class CheckAccessTest(unittest.TestCase):
 
 class SecretsTest(unittest.TestCase):
     def test_protected_code_first(self):
-        ctx = SimpleNamespace(protected_elsewhere=["/p1", "/p2"], protected=True, dev_root="/dev",
-                              dev_git_common="/dev/.git", state_root="/state")
+        ctx = _context("/state", protected_elsewhere=["/p1", "/p2"], protected=True, dev_root="/dev",
+                       dev_git_common="/dev/.git")
         self.assertEqual(secrets(ctx)[:4], ["/p1", "/p2", "/dev", "/dev/.git"])
 
 
@@ -538,8 +544,7 @@ class PathToolsTest(unittest.TestCase):
         for d in (os.path.join(node, "bin"), os.path.join(home, "scripts"), os.path.join(home, ".ssh", "bin"),
                   os.path.join(root, "bin"), os.path.join(root, "libexec")):
             os.makedirs(d)
-        ctx = SimpleNamespace(root=root, run_dir=os.path.join(tmp, "run"), state_root=os.path.join(tmp, "state"),
-                              protected_elsewhere=[], protected=False)
+        ctx = _context(os.path.join(tmp, "state"), root=root, run_dir=os.path.join(tmp, "run"))
         path = [f"{node}/bin", os.path.join(home, "scripts"), home, tmp, "/usr/bin", f"{home}/.ssh/bin",
                 f"{root}/bin", f"{root}/libexec", f"{home}/missing/bin", "relative/bin"]
         # The test tree lies in a temp directory, itself never readable.
@@ -661,6 +666,16 @@ class SetAsideTest(unittest.TestCase):
             self.assertFalse(os.path.exists(path))
             self.assertIn(f"{path} was created during the session", err.getvalue())
 
+    def test_parent_made_read_only(self):
+        from claude_secure_sandbox.sandbox import set_aside_new_locked_files
+        work = _tmp_tree(self)
+        created = _touch(os.path.join(work, ".claude", "settings.json"), "{}")
+        os.chmod(os.path.dirname(created), 0o555)
+        ctx = SimpleNamespace(home_session=False, work=work, copy_git=os.path.join(work, ".git"))
+        with mock.patch("platform.system", return_value="Linux"), mock.patch("sys.stderr", new_callable=io.StringIO):
+            set_aside_new_locked_files(ctx, [])
+        self.assertFalse(os.path.exists(created))
+
     def test_never_through_a_link(self):
         from claude_secure_sandbox.sandbox import set_aside_new_locked_files
         work, elsewhere = _tmp_tree(self), _tmp_tree(self)
@@ -766,6 +781,21 @@ class GitDirsTest(unittest.TestCase):
         for path in (protected, bare, work, apart):
             with self.subTest(path=path):
                 self.assertIn(path, found)
+
+
+class SettingsCopyTest(unittest.TestCase):
+    def test_settings_leading_into_protected_code_are_not_copied(self):
+        from claude_secure_sandbox.claude_config import sync_claude_config
+        tmp = _tmp_tree(self)
+        home, protected = os.path.join(tmp, "home"), os.path.join(tmp, "dotfiles")
+        _touch(os.path.join(protected, "claude-settings.json"), '{"secret": "IN-PROTECTED-REPO"}')
+        os.makedirs(os.path.join(home, ".claude"))
+        os.symlink(os.path.join(protected, "claude-settings.json"), os.path.join(home, ".claude", "settings.json"))
+        ctx = _context(os.path.join(tmp, "state"), dev_root=os.path.join(tmp, "work"), protected_elsewhere=[protected])
+        ctx.setup_paths()
+        with mock.patch.dict(os.environ, {"HOME": home}), mock.patch("sys.stderr", new_callable=io.StringIO):
+            sync_claude_config(ctx)
+        self.assertEqual(read_text(os.path.join(ctx.claude_home, "settings.json")), "{}\n")
 
 
 # --- what the developer sees ----------------------------------------------------

@@ -14,7 +14,7 @@ from typing import Dict, List
 
 from .common import NAME, GitError, ask, die, log, read_lines, stamp, warn
 from .context import Context
-from .filtered_copy import (INCOMING, check_copy_integrity, new_commits, report_absent_public_files,
+from .filtered_copy import (INCOMING, branch_tips, check_copy_integrity, new_commits, report_absent_public_files,
                             write_sparse_patterns)
 
 # A commit of Claude's can reference content that is hidden, hence missing from
@@ -50,13 +50,8 @@ def _integrate_hint(ctx: Context, branch: str) -> str:
     """The commands that bring Claude's commits into the developer's branch:
     copies signed by the developer if they sign their commits."""
     if ctx.git_dev.value("config", "--bool", "commit.gpgsign") == "true":
-        return f"git fetch claude, then on {branch}: git cherry-pick -S {branch}..claude/{branch}"
+        return f"git fetch claude, then on {branch}: git cherry-pick -S --no-merges {branch}..claude/{branch}"
     return f"git fetch claude, then on {branch}: git rebase claude/{branch}"
-
-
-def branch_tips(ctx: Context) -> Dict[str, str]:
-    listing = ctx.git_copy.value("for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads")
-    return {b: t for t, _, b in (line.partition(" ") for line in listing.splitlines()) if b}
 
 
 def _count(ctx: Context, include: str, *exclude: str) -> int:
@@ -75,10 +70,20 @@ def _integrated(ctx: Context, sha: str, tip: str) -> bool:
     # it has Claude's commits once they are fetched.
     if not ctx.git_dev.ok("cat-file", "-e", f"{tip}^{{commit}}", quiet=True):
         return False
-    # Merges count too: a merge of Claude's (its conflict resolution) is only
-    # integrated once the developer's commit holds it.
-    proc = ctx.git_dev.run("rev-list", "--right-only", "--cherry-pick", f"{sha}...{tip}", quiet=True)
+    # A merge has no patch to compare: Claude's merges are kept aside instead
+    # (_keep_merges) when its branch follows the developer's.
+    proc = ctx.git_dev.run("rev-list", "--right-only", "--cherry-pick", "--no-merges", f"{sha}...{tip}", quiet=True)
     return proc.returncode == 0 and not proc.stdout.strip()
+
+
+def _keep_merges(ctx: Context, branch: str, sha: str, tip: str) -> None:
+    """Before Claude's branch follows the developer's, a merge commit of
+    Claude's the developer does not have (its conflict resolution, say) is
+    kept under refs/backup: _integrated cannot tell whether it was taken."""
+    if ctx.git_copy.value("rev-list", "--merges", f"{sha}..{tip}"):
+        backup = f"refs/backup/{stamp()}/{branch}"
+        ctx.git_copy.out("update-ref", backup, tip)
+        log(f"Claude's {branch} has merge commits that are not in yours: kept, git fetch claude {backup}")
 
 
 def _choose(ctx: Context, branch: str, sha: str, tip: str) -> str:
@@ -105,7 +110,9 @@ def _start_session(ctx: Context, branch: str, sha: str) -> bool:
     target = sha
     if not ctx.fresh_copy:
         tip = ctx.git_copy.value("rev-parse", "-q", "--verify", f"refs/heads/{branch}^{{commit}}") if branch else ""
-        if tip and tip != sha and not _integrated(ctx, sha, tip):
+        if tip and tip != sha and _integrated(ctx, sha, tip):
+            _keep_merges(ctx, branch, sha, tip)
+        elif tip and tip != sha:
             if ctx.git_copy.ok("merge-base", "--is-ancestor", sha, tip, quiet=True):
                 choice = "3"
                 log(f"continuing on Claude's {branch}: {_count(ctx, tip, sha)} commit(s) "
@@ -120,19 +127,19 @@ def _start_session(ctx: Context, branch: str, sha: str) -> bool:
             else:
                 ctx.git_copy.out("update-ref", f"refs/backup/{now}/{branch}", tip)
                 log(f"Claude's {branch} kept: git fetch claude refs/backup/{now}/{branch}")
-        status = ctx.git_copy_wt.value("status", "--porcelain", "--untracked-files=all")
+        status = ctx.git_copy_worktree.value("status", "--porcelain", "--untracked-files=all")
         if status:
-            if not ctx.git_copy_wt.ok("stash", "push", "--include-untracked", "--quiet",
+            if not ctx.git_copy_worktree.ok("stash", "push", "--include-untracked", "--quiet",
                                       "-m", f"{NAME} {now}"):
                 die(f"cannot stash the changes in the copy ({ctx.work}); run with --continue or clean it up")
             log(f"uncommitted changes from the previous session stashed (git stash, \"{NAME} {now}\")")
     report_absent_public_files(ctx, write_sparse_patterns(ctx, target))
     if branch:
-        if not ctx.git_copy_wt.ok("checkout", "-q", "-f", "-B", branch, target):
+        if not ctx.git_copy_worktree.ok("checkout", "-q", "-f", "-B", branch, target):
             die(f"cannot check out {branch} in the copy")
-    elif not ctx.git_copy_wt.ok("checkout", "-q", "-f", "--detach", sha):
+    elif not ctx.git_copy_worktree.ok("checkout", "-q", "-f", "--detach", sha):
         die(f"cannot check out {sha} in the copy")
-    ctx.git_copy_wt.run("sparse-checkout", "reapply", quiet=True)
+    ctx.git_copy_worktree.run("sparse-checkout", "reapply", quiet=True)
     return True
 
 
@@ -143,6 +150,7 @@ def _sync_branch(ctx: Context, branch: str, sha: str, tip: str) -> None:
         ctx.git_copy.out("update-ref", f"refs/heads/{branch}", sha)
     elif tip != sha:
         if _integrated(ctx, sha, tip):
+            _keep_merges(ctx, branch, sha, tip)
             ctx.git_copy.out("update-ref", f"refs/heads/{branch}", sha, tip)
         else:
             log(f"Claude's {branch} has commits you have not integrated: left as is "
@@ -205,7 +213,7 @@ def end_of_session(ctx: Context, before: Dict[str, str]) -> None:
         if n:
             lines.append(f"  {branch}: {n} new commit(s)")
             changed.append(branch)
-    dirty = len(ctx.git_copy_wt.value("status", "--porcelain", "--untracked-files=all").splitlines())
+    dirty = len(ctx.git_copy_worktree.value("status", "--porcelain", "--untracked-files=all").splitlines())
     if not lines and not dirty:
         return
     out = [f"\n{NAME}: end of session"] + lines

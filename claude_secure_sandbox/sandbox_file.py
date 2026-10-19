@@ -15,11 +15,10 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
-import subprocess
 from typing import List, Set, Tuple
 
-from .common import (LEGACY_PROTECT_FILE, SANDBOX_FILE, ask, die, expand_home, git_env, log, path_within,
-                     read_lines, read_text, sha1, warn, write_lines)
+from .common import (SANDBOX_FILE, ask, die, expand_home, log, path_within, read_lines, read_text, sha1, warn,
+                     write_lines)
 
 SECTIONS = ("allowed-git", "allowed-external", "allowed-domain")
 _PATTERN_CHARS = set("*?[\\")
@@ -190,25 +189,6 @@ def sparse_escape(path: str) -> str:
     return path
 
 
-def ever_protected(repo: str) -> bool:
-    """True if a .claudesandbox (or earlier .claudeprotected) was ever
-    committed at the root of the repository, on any branch or tag: once
-    protected, it stays protected for every other session, whatever is
-    checked out. Read from git at each launch, never from the wrapper's
-    state. A repository git cannot read (a broken ref, another user's) or
-    that does not answer in 30 s counts as protected."""
-    try:
-        proc = subprocess.run(["git", "-C", repo, "-c", "safe.directory=*", "-c", "core.fsmonitor=false",
-                               "-c", "log.showSignature=false",
-                               "log", "-1", "--format=%H", "--full-history", "--all", "--",
-                               f":(top,literal){SANDBOX_FILE}", f":(top,literal){LEGACY_PROTECT_FILE}"],
-                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=git_env(),
-                              encoding="utf-8", errors="surrogateescape", timeout=30)
-    except subprocess.TimeoutExpired:
-        return True
-    return proc.returncode != 0 or bool(proc.stdout.strip())
-
-
 # --- confirmations -------------------------------------------------------------
 
 
@@ -217,7 +197,7 @@ class Grants:
     each in state/granted: "see" ([allowed-git]), "read" ([allowed-external]),
     "domain" ([allowed-domain]), and "unprotected" once the developer stopped
     protecting it. Only confirmations: whether a repository is protected is
-    read from git (ever_protected). The wrapper's state is out of every
+    read from the disk and git (scan.py). The wrapper's state is out of every
     sandbox's reach."""
 
     def __init__(self, state: str):

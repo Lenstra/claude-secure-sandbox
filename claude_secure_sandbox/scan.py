@@ -1,7 +1,12 @@
-"""Scan of the whole computer for protected repositories, at each launch.
+"""Which directories are protected, and the scan of the whole computer for
+them at each launch.
 
-Every protected repository other than the session's is hidden entirely: the
-scan must be complete and current, so it runs before each session.
+A directory is protected if it holds a .claudesandbox, or if it is a git
+repository that ever committed one at its root, on any branch or tag; its
+git directory too, wherever it lives. This is read from the disk and from
+git at each launch, never from the wrapper's state. Every protected
+repository other than the session's is hidden entirely: the scan must be
+complete and current, so it runs before each session.
 """
 
 from __future__ import annotations
@@ -13,24 +18,27 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
-from .common import LEGACY_PROTECT_FILE, SANDBOX_FILE, die, git_env, path_within, realpath, volume_roots
-from .sandbox_file import ever_protected
+from .common import LEGACY_PROTECT_FILE, SANDBOX_FILE, Git, die, path_within, realpath, volume_roots
 
 # macOS reaches the data volume through firmlinks; fd reports it under this prefix.
 MACOS_DATA = "/System/Volumes/Data"
+# A scan that does not finish in this time stops the launch; a repository
+# whose history does not answer in this time counts as protected.
+SCAN_TIMEOUT, HISTORY_TIMEOUT = 600, 30
 # Linux filesystems on local disks; virtual and network ones are not scanned.
 LOCAL_FILESYSTEMS = {"ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "jfs", "reiserfs",
                      "vfat", "exfat", "ntfs", "ntfs3", "fuseblk"}
 
 
-def find_markers(root: str, one_file_system: bool = False, timeout: float = None) -> List[str]:
+def find_markers(root: str) -> List[str]:
     """Under root: every .claudesandbox (and earlier .claudeprotected), a
     file or a link; every .git, whose repository may have been protected on
     any branch; every HEAD file, which may belong to a bare repository or to
-    a git directory kept apart from its work tree (fd, else find). Never inside .git or
-    node_modules, and with fd not in ~/Library when root is the home
-    directory (only for speed). Stops the launch if the scan does not finish
-    in time: a repository it did not reach would not be hidden."""
+    a git directory kept apart from its work tree (fd, else find), without
+    leaving root's filesystem. Never inside .git or node_modules, and with fd
+    not in ~/Library when root is the home directory (only for speed). Stops
+    the launch if the scan does not finish in time: a repository it did not
+    reach would not be hidden."""
     # fd is installed as fdfind on Debian and Ubuntu.
     fd = shutil.which("fd") or shutil.which("fdfind")
     if fd:
@@ -39,20 +47,18 @@ def find_markers(root: str, one_file_system: bool = False, timeout: float = None
             # Anchored: "Library" alone would skip every directory of that
             # name, and the protected repositories inside.
             cmd += ["--exclude", "/Library"]
-        if one_file_system:
-            cmd += ["--one-file-system"]
-        cmd += [f"^(\\.({SANDBOX_FILE[1:]}|{LEGACY_PROTECT_FILE[1:]}|git)|HEAD)$", root]
+        cmd += ["--one-file-system", f"^(\\.({SANDBOX_FILE[1:]}|{LEGACY_PROTECT_FILE[1:]}|git)|HEAD)$", root]
     else:
-        cmd = ["find", root] + (["-xdev"] if one_file_system else []) + [
+        cmd = ["find", root, "-xdev",
             "-name", "node_modules", "-prune", "-o", "-name", ".git", "-print", "-prune", "-o",
             "-type", "f", "-name", "HEAD", "-print", "-o",
             "(", "-type", "f", "-o", "-type", "l", ")",
             "(", "-name", SANDBOX_FILE, "-o", "-name", LEGACY_PROTECT_FILE, ")", "-print"]
     try:
         output = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, encoding="utf-8",
-                                errors="surrogateescape", timeout=timeout).stdout
+                                errors="surrogateescape", timeout=SCAN_TIMEOUT).stdout
     except subprocess.TimeoutExpired:
-        die(f"the scan of {root} for protected repositories did not finish in {timeout:.0f} s: "
+        die(f"the scan of {root} for protected repositories did not finish in {SCAN_TIMEOUT} s: "
             "a repository it did not reach would not be hidden")
     found = []
     for f in output.splitlines():
@@ -63,9 +69,31 @@ def find_markers(root: str, one_file_system: bool = False, timeout: float = None
 
 
 def protects(directory: str) -> bool:
-    """True if the directory is protected: it holds a .claudesandbox, or an
-    earlier .claudeprotected."""
+    """True if the directory holds a .claudesandbox, or an earlier
+    .claudeprotected."""
     return any(os.path.isfile(os.path.join(directory, f)) for f in (SANDBOX_FILE, LEGACY_PROTECT_FILE))
+
+
+def _git(repo: str) -> Git:
+    """git in a repository found on the computer, maybe another user's: read
+    only, nothing of its configuration run."""
+    return Git(["-C", repo, "-c", "safe.directory=*", "-c", "core.fsmonitor=false", "-c", "log.showSignature=false"],
+               {})
+
+
+def ever_protected(repo: str) -> bool:
+    """True if a .claudesandbox (or earlier .claudeprotected) was ever
+    committed at the root of the repository, on any branch or tag: once
+    protected, it stays protected for every other session, whatever is
+    checked out. A repository git cannot read (a broken ref) or that does not
+    answer in time counts as protected."""
+    try:
+        proc = _git(repo).run("log", "-1", "--format=%H", "--full-history", "--all", "--",
+                              f":(top,literal){SANDBOX_FILE}", f":(top,literal){LEGACY_PROTECT_FILE}",
+                              quiet=True, timeout=HISTORY_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return True
+    return proc.returncode != 0 or bool(proc.stdout.strip())
 
 
 def scan_roots() -> List[str]:
@@ -97,10 +125,8 @@ def is_git_dir(path: str) -> bool:
 def git_dir_outside(repo: str) -> str:
     """The git directory of a repository when it lies outside its work tree
     (a submodule's, in the parent's .git/modules), else an empty string."""
-    proc = subprocess.run(["git", "-C", repo, "-c", "safe.directory=*", "rev-parse", "--path-format=absolute",
-                           "--git-common-dir"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          env=git_env(), encoding="utf-8", errors="surrogateescape")
-    git_dir = realpath(proc.stdout.rstrip("\n")) if proc.returncode == 0 else ""
+    git_dir = _git(repo).value("rev-parse", "--path-format=absolute", "--git-common-dir")
+    git_dir = realpath(git_dir) if git_dir else ""
     return git_dir if git_dir and not path_within(repo, git_dir) else ""
 
 
@@ -117,7 +143,7 @@ def protected_repositories(state_root: str, roots: List[str]) -> List[str]:
         if real in seen or not os.path.isdir(real):
             continue
         seen.add(real)
-        for f in find_markers(real, one_file_system=True, timeout=600):
+        for f in find_markers(real):
             directory = os.path.dirname(f)
             if platform.system() == "Darwin" and directory.startswith(MACOS_DATA + "/"):
                 directory = directory[len(MACOS_DATA):]

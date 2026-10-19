@@ -1,4 +1,4 @@
-"""Shared helpers: logging, paths, configuration, binaries, git, lock."""
+"""Shared helpers: messages, paths, files, binaries, git command lines, lock."""
 
 from __future__ import annotations
 
@@ -191,6 +191,16 @@ def state_root() -> str:
 # --- binaries ------------------------------------------------------------------
 
 
+def command_output(cmd: List[str], **kw) -> Optional[str]:
+    """stdout of a command, or None if it fails or cannot run."""
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, encoding="utf-8",
+                              errors="surrogateescape", **kw)
+    except OSError:
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
 def find_real_claude(root: str) -> Optional[str]:
     """The first "claude" on the PATH that is not this wrapper."""
     me = realpath(os.path.join(root, "bin", "claude"))
@@ -274,7 +284,8 @@ class Git:
         return git_env(**self.env, **(extra or {}))
 
     def run(self, *args: str, input: Optional[str] = None, quiet: bool = False,
-            env: Optional[dict] = None) -> subprocess.CompletedProcess:
+            env: Optional[dict] = None, timeout: Optional[float] = None) -> subprocess.CompletedProcess:
+        """Raises subprocess.TimeoutExpired past the timeout."""
         return subprocess.run(
             ["git", *self.args, *args],
             input=input,
@@ -283,6 +294,7 @@ class Git:
             env=self.environment(env),
             encoding="utf-8",
             errors="surrogateescape",
+            timeout=timeout,
         )
 
     def out(self, *args: str, **kw) -> str:
@@ -329,7 +341,7 @@ _HARDENED = [
 ]
 
 
-def git_copy_raw(copy_git: str, work: str) -> Git:
+def git_copy_worktree(copy_git: str, work: str) -> Git:
     """For working tree operations (stash, checkout): placeholders stay
     active, they only write into Claude's copy."""
     args: List[str] = []
@@ -344,8 +356,9 @@ def git_copy_raw(copy_git: str, work: str) -> Git:
 
 
 def git_copy(copy_git: str, work: str) -> Git:
-    """For checks and reads of Claude's commits: without replace refs."""
-    g = git_copy_raw(copy_git, work)
+    """For checks and reads of Claude's commits: real objects, without the
+    placeholders' replace refs."""
+    g = git_copy_worktree(copy_git, work)
     g.env["GIT_NO_REPLACE_OBJECTS"] = "1"
     return g
 

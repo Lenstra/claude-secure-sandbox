@@ -50,11 +50,15 @@ class Progress:
                 return
 
 
+def _copy_branch(ctx: Context) -> str:
+    return ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
+
+
 def session_label(ctx: Context) -> str:
     if not ctx.protected:
         name = ctx.work if ctx.home_session else os.path.basename(ctx.work)
         return f"directory {name}" + (" (read only)" if ctx.home_session else "")
-    branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
+    branch = _copy_branch(ctx)
     return f"protected repository {os.path.basename(ctx.dev_root)} · {branch}"
 
 
@@ -72,7 +76,7 @@ def confirm_session(ctx: Context) -> bool:
     others = [display_path(r) for r in ctx.protected_elsewhere]
     others_text = ", ".join(others[:3]) + (f" and {len(others) - 3} more" if len(others) > 3 else "")
     if ctx.protected:
-        branch = ctx.git_copy.value("symbolic-ref", "-q", "--short", "HEAD") or "detached HEAD"
+        branch = _copy_branch(ctx)
         hidden = ", ".join(ctx.hidden[:5]) + (f" and {len(ctx.hidden) - 5} more"
                                               if len(ctx.hidden) > 5 else "")
         intro = f"This repository is protected: Claude only sees what its {SANDBOX_FILE} lists."

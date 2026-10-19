@@ -386,7 +386,7 @@ check "divergence reported" grep -q "have diverged: 1 commit(s) of yours are not
 check "without a terminal: continue on Claude's branch" grep -q "no terminal to ask: continuing on Claude's branch" "$T/out/last"
 collect
 run_claude_answer 2 "$T/fakebin/s-claude.sh"
-check "choice 2: quit to integrate first" grep -q "integrate Claude's commits (git fetch claude, then on main: git cherry-pick -S main..claude/main)" "$T/out/last"
+check "choice 2: quit to integrate first" grep -q "integrate Claude's commits (git fetch claude, then on main: git cherry-pick -S --no-merges main..claude/main)" "$T/out/last"
 check_not "choice 2: claude not started" grep -q '^SANDBOXED' "$T/out/last"
 run_claude_answer 1 "$T/fakebin/s-dev.sh"
 check "choice 1: backup announced" grep -q "Claude's main kept: git fetch claude refs/backup/" "$T/out/last"

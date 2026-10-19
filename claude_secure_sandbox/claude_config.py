@@ -9,11 +9,10 @@ import os
 import platform
 import shlex
 import shutil
-import subprocess
 
-from .common import (ensure_real_dir, install_file, install_json, load_json, overlaps, path_within, read_text,
+from .access import credential_paths
+from .common import (command_output, ensure_real_dir, install_file, install_json, load_json, overlaps, path_within, read_text,
                      realpath, regular_file, remove_entry, warn, write_text)
-from .access import CREDENTIALS
 from .context import Context
 from .screen import session_label
 
@@ -50,28 +49,36 @@ def _copy_settings(ctx: Context) -> None:
     bubblewrap locks the link's target, not the link. An empty one when the
     developer has none, so that there is a file to lock."""
     source = os.path.join(os.environ["HOME"], ".claude", "settings.json")
-    try:
-        text = read_text(source) if os.path.isfile(source) else "{}\n"
-    except OSError:
-        warn("cannot read ~/.claude/settings.json")
-        text = "{}\n"
+    text = "{}\n"
+    if os.path.isfile(source):
+        if _leads_somewhere_hidden(ctx, source):
+            warn(f"~/.claude/settings.json ignored (it leads to {realpath(source)})")
+        else:
+            try:
+                text = read_text(source)
+            except OSError:
+                warn("cannot read ~/.claude/settings.json")
     tmp = os.path.join(ctx.wtmp, "settings.json")
     write_text(tmp, text)
     install_file(tmp, os.path.join(ctx.claude_home, "settings.json"))
+
+
+def _leads_somewhere_hidden(ctx: Context, path: str) -> bool:
+    """True if path, a ~/.claude item, leads (through links) to what the
+    sandbox hides: protected code, credentials, the wrapper's state, old
+    transcripts. Passing it through would re-open it."""
+    home_claude = os.path.join(os.environ["HOME"], ".claude")
+    hidden = ctx.protected_code + [ctx.state_root] + credential_paths()
+    hidden += [os.path.join(home_claude, item) for item in PRIVATE_CLAUDE_ITEMS]
+    return any(overlaps(realpath(path), h) for h in hidden if h)
 
 
 def _link_config_items(ctx: Context) -> None:
     """Each SYNC item of ~/.claude becomes a link to the original, whose real
     path becomes readable (ctx.config_read): nothing in ~/.claude is writable
     from the sandbox, and transcripts stay unreadable. An item that leads to
-    a sensitive place is left out."""
+    what the sandbox hides is left out."""
     src, dst = os.path.join(os.environ["HOME"], ".claude"), ctx.claude_home
-    # A link there must not re-open what the sandbox hides.
-    sensitive = list(ctx.protected_elsewhere) + [ctx.state_root]
-    sensitive += [os.path.join(os.environ["HOME"], c) for c in CREDENTIALS]
-    sensitive += [os.path.join(src, item) for item in PRIVATE_CLAUDE_ITEMS]
-    if ctx.protected:
-        sensitive += [ctx.dev_root, ctx.dev_git_common]
     for item in SYNC:
         target = os.path.join(dst, item)
         # Never write through a link Claude planted in claude-home.
@@ -81,7 +88,7 @@ def _link_config_items(ctx: Context) -> None:
         try:
             source = os.path.join(src, item)
             real = realpath(source) if os.path.exists(source) else ""
-            if real and any(overlaps(real, s) for s in sensitive if s):
+            if real and _leads_somewhere_hidden(ctx, source):
                 warn(f"sync item ignored (it leads to {real}): {item}")
                 real = ""
             if item == "plugins" and real and os.path.isdir(real):
@@ -164,12 +171,9 @@ def _read_login():
     ~/.claude/.credentials.json on Linux."""
     if platform.system() == "Darwin":
         user = os.environ.get("USER", "")
-        proc = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", user, "-w"],
-                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, encoding="utf-8")
-        if proc.returncode != 0:
-            return None
+        out = command_output(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", user, "-w"])
         try:
-            return json.loads(proc.stdout)
+            return json.loads(out) if out else None
         except ValueError:
             return None
     source = os.path.join(os.environ["HOME"], ".claude", ".credentials.json")

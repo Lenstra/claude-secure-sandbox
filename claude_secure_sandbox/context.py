@@ -6,8 +6,7 @@ import os
 import re
 from typing import List, Optional
 
-from .common import (Git, Lock, die, ensure_real_dir, git_copy, git_copy_raw,
-                     git_dev, sha1, warn, write_text)
+from .common import Git, Lock, die, ensure_real_dir, git_copy, git_copy_worktree, git_dev, sha1, warn, write_text
 
 
 class Context:
@@ -24,8 +23,10 @@ class Context:
         # copy of it. Otherwise nothing is protected here, and Claude works in
         # dev_root itself.
         self.protected = False
-        # In a protected repository: the confirmed [allowed-git] paths, the only ones Claude
-        # sees, and the topmost hidden paths of HEAD, for display.
+        # In a protected repository: the confirmed [allowed-git] paths, the
+        # only ones Claude sees; the hidden paths of HEAD, each as high in the
+        # tree as possible (write-denied, and listed in the system prompt),
+        # and those of them that are directories.
         self.visible: List[str] = []
         self.hidden: List[str] = []
         self.hidden_dirs: List[str] = []
@@ -47,9 +48,16 @@ class Context:
         self.lock: Optional[Lock] = None
 
     @property
+    def protected_code(self) -> List[str]:
+        """Every protected path of the computer: the other protected
+        repositories, and this one with its git directory when it is
+        protected (Claude then works on the copy)."""
+        own = [self.dev_root, self.dev_git_common] if self.protected else []
+        return list(self.protected_elsewhere) + own
+
+    @property
     def protected_code_exists(self) -> bool:
-        """This repository is protected, or another one on the computer."""
-        return self.protected or bool(self.protected_elsewhere)
+        return bool(self.protected_code)
 
     @property
     def git_dev(self) -> Git:
@@ -60,8 +68,8 @@ class Context:
         return git_copy(self.copy_git, self.work)
 
     @property
-    def git_copy_wt(self) -> Git:
-        return git_copy_raw(self.copy_git, self.work)
+    def git_copy_worktree(self) -> Git:
+        return git_copy_worktree(self.copy_git, self.work)
 
     def state_file(self, name: str) -> str:
         return os.path.join(self.state, name)

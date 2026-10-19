@@ -5,6 +5,10 @@ repository of the computer is hidden, neither readable nor writable. Started
 in a protected repository (one with a .claudesandbox), Claude works on a
 filtered copy of it, with only the paths the file lists. Anywhere else,
 Claude works in the directory itself.
+
+Nothing in the environment makes the wrapper skip the sandbox: a file Claude
+wrote (an .envrc) could set it. Inside a session, `claude` on the PATH is the
+real binary (sandbox._sandbox_env), already confined.
 """
 
 from __future__ import annotations
@@ -12,17 +16,15 @@ from __future__ import annotations
 import os
 import shutil
 import signal
-import subprocess
 import sys
 from typing import List, NoReturn
 
 from . import access, claude_config, filtered_copy, sandbox, scan, session
 from .common import (LEGACY_PROTECT_FILE, NAME, SANDBOX_FILE, Lock, check_deps, check_seccomp, die, find_real_claude,
-                     find_srt, fs_within, git_env, path_within, realpath, state_root, volume_roots, warn)
+                     find_srt, fs_within, git_dev, path_within, realpath, state_root, volume_roots, warn)
 from .context import Context
-from .sandbox_file import (confirm_access, confirm_visible, ever_protected, hidden_roots, is_visible,
+from .sandbox_file import (confirm_access, confirm_visible, hidden_roots, is_visible,
                            leads_to_visible, read_sandbox_file, visible_hash)
-from .scan import protects
 from .screen import Progress
 
 # Commands that do not open a session: no sandbox.
@@ -36,10 +38,9 @@ def exec_real(ctx: Context, args: List[str]) -> NoReturn:
 
 
 def _git_toplevel(cwd: str) -> str:
-    proc = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], stdout=subprocess.PIPE,
-                          stderr=subprocess.DEVNULL, env=git_env(), encoding="utf-8", errors="surrogateescape")
-    # Only the newline: a directory name may end with a space.
-    return proc.stdout.rstrip("\n") if proc.returncode == 0 else ""
+    """The root of the git repository holding cwd, or an empty string. Only
+    the newline is stripped: a directory name may end with a space."""
+    return git_dev(cwd).value("rev-parse", "--show-toplevel")
 
 
 def _sigterm(*_) -> NoReturn:
@@ -119,7 +120,7 @@ def find_protected_elsewhere(ctx: Context, cwd: str, protected: bool) -> None:
     # Every repository above, even one the scan could not reach.
     above = [d for d in _ancestors(cwd) if d != ctx.dev_root
              and (os.path.lexists(os.path.join(d, ".git")) or scan.is_git_dir(d))
-             and (protects(d) or ever_protected(d))]
+             and (scan.protects(d) or scan.ever_protected(d))]
     for repo in ctx.protected_elsewhere + above:
         if fs_within(repo, ctx.dev_root):
             die(f"{ctx.dev_root} lies inside the protected repository {repo}: run claude from {repo}")
@@ -165,7 +166,7 @@ def run_protected(ctx: Context, cwd: str, args: List[str], was_protected: bool) 
     launch_dir = ctx.work
     if rel and os.path.isdir(os.path.join(ctx.work, rel)):
         launch_dir = os.path.join(ctx.work, rel)
-    before = session.branch_tips(ctx)
+    before = filtered_copy.branch_tips(ctx)
     status = launch(ctx, launch_dir, args)
     session.end_of_session(ctx, before)
     return status
@@ -181,15 +182,16 @@ def main(root: str, args: List[str]) -> int:
 
 
 def _main(root: str, args: List[str]) -> int:
+    """The launch: which directory Claude works in and whether it is
+    protected, the scan of the computer and the refusals, then the state,
+    the lock and the session."""
     ctx = Context(root, state_root())
     ctx.real_claude = find_real_claude(root) or die("claude binary not found on the PATH")
     if args and args[0] in SESSIONLESS:
         exec_real(ctx, args)
     check_deps()
     cwd = realpath(os.getcwd())
-    # Nothing in the environment can make the wrapper skip the sandbox: a file
-    # Claude wrote (an .envrc) could set it. Inside a session, claude on the
-    # PATH is the real binary (sandbox._sandbox_env), already confined.
+    # The wrapper's own copies and state are never a starting point.
     if path_within(ctx.state_root, cwd):
         die(f"{cwd} belongs to {NAME}: run claude from your own directory")
 
@@ -205,7 +207,7 @@ def _main(root: str, args: List[str]) -> int:
     # A repository that was ever protected, on any branch, stays protected
     # until the developer confirms otherwise (confirm_visible), even with a
     # branch checked out that has no .claudesandbox.
-    was_protected = bool(toplevel) and ever_protected(ctx.dev_root)
+    was_protected = bool(toplevel) and scan.ever_protected(ctx.dev_root)
     protected = ctx.sandbox_file.exists or was_protected
 
     ctx.srt = find_srt(root) or die(f'srt not found: run "npm ci" in {root}')

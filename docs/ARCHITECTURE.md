@@ -450,7 +450,7 @@ sequenceDiagram
 ```
 claude-secure-sandbox: your branch feature-x and Claude's have diverged: 2 commit(s) of yours are not in Claude's branch, 3 of Claude's are not in yours.
   1) start from your branch (Claude's commits stay retrievable)
-  2) quit, to integrate Claude's commits first (git fetch claude, then on feature-x: git cherry-pick -S feature-x..claude/feature-x)
+  2) quit, to integrate Claude's commits first (git fetch claude, then on feature-x: git cherry-pick -S --no-merges feature-x..claude/feature-x)
   3) continue on Claude's branch, without your new commits
 claude-secure-sandbox: choice [1/2/3]:
 ```
@@ -466,11 +466,11 @@ Nothing is verified or copied at the end of a session: Claude's branches are alr
 ```
 claude-secure-sandbox: end of session
   feature-x: 3 new commit(s)
-  next: git fetch claude, then on feature-x: git cherry-pick -S feature-x..claude/feature-x
+  next: git fetch claude, then on feature-x: git cherry-pick -S --no-merges feature-x..claude/feature-x
   2 uncommitted file(s) left in the copy (...); they will be stashed at the next launch
 ```
 
-The commands it suggests depend on the developer's configuration: `git cherry-pick -S` when `commit.gpgsign` is set, so that Claude's commits are integrated as copies signed by the developer, otherwise `git rebase`.
+The commands it suggests depend on the developer's configuration: `git cherry-pick -S --no-merges` when `commit.gpgsign` is set, so that Claude's commits are integrated as copies signed by the developer, otherwise `git rebase`. Claude's commits count as integrated once the developer's branch holds them, as is or rewritten (compared by patch). A merge commit has no patch to compare: before Claude's branch follows the developer's, one that holds a merge the developer lacks is kept under `refs/backup/<date>/<branch>`, and the wrapper says so.
 
 If the session ends abruptly (terminal closed, crash), nothing is lost: the commits are in the copy, and the next launch offers to continue on them. Ctrl-C reaches Claude; the wrapper survives it to print the summary.
 
@@ -715,7 +715,7 @@ claude_secure_sandbox/sandbox_file.py       .claudesandbox: reading, what Claude
 claude_secure_sandbox/access.py             what a session may reach: domains, secrets, tools on the PATH
 claude_secure_sandbox/filtered_copy.py      filtered copy: fetch, fingerprints, placeholders
 claude_secure_sandbox/session.py            claude remote, branches at launch, end of session summary
-claude_secure_sandbox/scan.py               machine scan for protected repositories (fd or find), at each launch
+claude_secure_sandbox/scan.py               which directories are protected (disk, git history), machine scan (fd or find)
 claude_secure_sandbox/claude_config.py      configuration passthrough, MCP servers, login, status line settings
 claude_secure_sandbox/screen.py             progress line, start screen, session label
 claude_secure_sandbox/sandbox.py            srt settings (read and write rules), git configuration, system prompt, launch

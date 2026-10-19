@@ -8,10 +8,9 @@ import ipaddress
 import os
 import platform
 import socket
-import subprocess
 from typing import List
 
-from .common import SANDBOX_FILE, die, overlaps, path_within, realpath
+from .common import SANDBOX_FILE, command_output, die, overlaps, path_within, realpath
 from .context import Context
 
 # --- network -------------------------------------------------------------------
@@ -130,13 +129,14 @@ def user_temp_dirs() -> List[str]:
     """macOS: the per-user temp and cache directories under /var/folders."""
     if platform.system() != "Darwin":
         return []
-    dirs = []
-    for name in ("DARWIN_USER_TEMP_DIR", "DARWIN_USER_CACHE_DIR"):
-        proc = subprocess.run(["getconf", name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              encoding="utf-8")
-        if proc.returncode == 0 and proc.stdout.strip():
-            dirs.append(realpath(proc.stdout.strip()))
-    return dirs
+    dirs = [(command_output(["getconf", name]) or "").strip()
+            for name in ("DARWIN_USER_TEMP_DIR", "DARWIN_USER_CACHE_DIR")]
+    return [realpath(d) for d in dirs if d]
+
+
+def credential_paths() -> List[str]:
+    """The credentials of CREDENTIALS, in the developer's home directory."""
+    return [os.path.join(os.environ["HOME"], c) for c in CREDENTIALS]
 
 
 def secrets(ctx: Context) -> List[str]:
@@ -144,12 +144,8 @@ def secrets(ctx: Context) -> List[str]:
     the temp directories, the wrapper's state and protected code."""
     home = os.environ["HOME"]
     # Protected code first: it is the reason given when a path overlaps several.
-    paths = list(ctx.protected_elsewhere)
-    if ctx.protected:
-        paths += [ctx.dev_root, ctx.dev_git_common]
-    paths += [ctx.state_root, os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
-    paths += [os.path.join(home, c) for c in CREDENTIALS] + TEMP_DIRS + user_temp_dirs()
-    return paths
+    return (ctx.protected_code + [ctx.state_root, os.path.join(home, ".claude"), os.path.join(home, ".claude.json")]
+            + credential_paths() + TEMP_DIRS + user_temp_dirs())
 
 
 def overlapped_secret(ctx: Context, path: str) -> str:
