@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -24,6 +25,7 @@ from claude_secure_sandbox.sandbox_file import (Grants, SandboxFile, confirm_acc
                                                 confirm_visible, hidden_roots, is_visible, leads_to_visible,
                                                 normalize_domain, normalize_visible, sparse_escape)
 from claude_secure_sandbox.scan import find_sandbox_files, protected_repositories  # noqa: E402
+from claude_secure_sandbox.screen import Progress, estimate  # noqa: E402
 
 
 # --- helpers -------------------------------------------------------------------
@@ -618,6 +620,50 @@ class ScanTest(unittest.TestCase):
         self.assertNotIn(no_longer, repos)
         self.assertFalse([r for r in repos if path_within(state_root, r)])
         self.assertTrue(self.expected <= set(repos))
+
+
+# --- what the developer sees ----------------------------------------------------
+
+
+class _Terminal(io.StringIO):
+    def isatty(self):
+        return True
+
+
+class ProgressTest(unittest.TestCase):
+    def test_estimate(self):
+        self.assertEqual(estimate(3, 6), 50)
+        # Never 100% before the end: this run may be slower than the last.
+        self.assertEqual(estimate(6, 6), 99)
+        self.assertEqual(estimate(60, 6), 99)
+
+    def test_animated_line_erased_at_the_end(self):
+        durations = os.path.join(_tmp_tree(self), "seconds")
+        _touch(durations, "10\n")
+        with mock.patch("sys.stderr", new_callable=_Terminal) as err:
+            with Progress("looking", durations):
+                time.sleep(0.25)
+        shown = err.getvalue()
+        self.assertIn("looking 0% (0 s)", shown)
+        self.assertTrue(shown.endswith("\r\033[K"))
+        self.assertLess(float(read_text(durations)), 10)
+
+    def test_no_terminal_no_line(self):
+        durations = os.path.join(_tmp_tree(self), "seconds")
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            with Progress("looking", durations):
+                pass
+        self.assertEqual(err.getvalue(), "")
+        # The duration is kept for the next run in a terminal.
+        self.assertTrue(os.path.exists(durations))
+
+    def test_interrupted_run_keeps_the_previous_duration(self):
+        durations = os.path.join(_tmp_tree(self), "seconds")
+        _touch(durations, "10\n")
+        with mock.patch("sys.stderr", new_callable=_Terminal), self.assertRaises(KeyboardInterrupt):
+            with Progress("looking", durations):
+                raise KeyboardInterrupt
+        self.assertEqual(read_text(durations), "10\n")
 
 
 # --- paths and files -----------------------------------------------------------

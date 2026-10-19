@@ -13,15 +13,15 @@ import os
 import shutil
 import signal
 import subprocess
-import sys
 from typing import List, NoReturn
 
 from . import access, claude_config, filtered_copy, sandbox, scan, session
 from .common import (LEGACY_PROTECT_FILE, NAME, SANDBOX_FILE, Lock, check_deps, check_seccomp, die, find_real_claude,
-                     find_srt, log, path_within, realpath, state_root, volume_roots, warn)
+                     find_srt, path_within, realpath, state_root, volume_roots, warn)
 from .context import Context
 from .sandbox_file import (confirm_access, confirm_visible, ever_protected, hidden_roots, is_visible,
                            leads_to_visible, read_sandbox_file, visible_hash)
+from .screen import Progress
 
 # Commands that do not open a session: no sandbox.
 SESSIONLESS = {"-v", "--version", "-h", "--help", "update", "doctor", "mcp", "config", "plugin",
@@ -90,11 +90,11 @@ def find_protected_elsewhere(ctx: Context, protected: bool) -> None:
     home = os.environ["HOME"]
     if os.environ.get("CLAUDE_SECURE_SANDBOX_SCAN") == "limited":
         roots = [home] if path_within(home, ctx.dev_root) else [home, ctx.dev_root]
+        repos = scan.protected_repositories(ctx.state_root, roots)
     else:
-        if sys.stderr.isatty():
-            log("looking for protected repositories on this computer...")
-        roots = scan.scan_roots()
-    repos = scan.protected_repositories(ctx.state_root, roots)
+        with Progress("looking for protected repositories on this computer",
+                      os.path.join(ctx.state_root, "scan-seconds")):
+            repos = scan.protected_repositories(ctx.state_root, scan.scan_roots())
     if protected:
         nested = [r for r in repos if r != ctx.dev_root and path_within(ctx.dev_root, r)]
         if nested:

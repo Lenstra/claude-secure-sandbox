@@ -92,7 +92,7 @@ Then, as `install.sh` tells you with your own paths:
 
 ## Usage
 
-Every `claude` session runs in the sandbox, and shows it. At each launch, the wrapper first looks for protected repositories on your computer (`looking for protected repositories on this computer...`, a few seconds), so that it can hide them. Then a screen says what applies here, what Claude will not see and what happens to your files; press Enter to start, or Ctrl-C to cancel:
+Every `claude` session runs in the sandbox, and shows it. At each launch, the wrapper first looks for protected repositories on your computer (`looking for protected repositories on this computer`, a few seconds, with a percentage estimated from the previous launch), so that it can hide them. Then a screen says what applies here, what Claude will not see and what happens to your files; press Enter to start, or Ctrl-C to cancel:
 
 ```
 🔒 claude-secure-sandbox
