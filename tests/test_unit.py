@@ -135,19 +135,24 @@ class SeccompTest(unittest.TestCase):
 
 class PathToolsTest(unittest.TestCase):
     def test_path_tools(self):
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        ctx = SimpleNamespace(root=root, run_dir="/nonexistent/run", state_root="/nonexistent/state",
+        tmp = _tmp_tree(self)
+        home, root = os.path.join(tmp, "home"), os.path.join(tmp, "tool")
+        node = os.path.join(home, ".nvm", "versions", "node", "v22")
+        for d in (os.path.join(node, "bin"), os.path.join(home, "scripts"), os.path.join(home, ".ssh", "bin"),
+                  os.path.join(root, "bin"), os.path.join(root, "libexec")):
+            os.makedirs(d)
+        ctx = SimpleNamespace(root=root, run_dir=os.path.join(tmp, "run"), state_root=os.path.join(tmp, "state"),
                               protected_elsewhere=[], protected=False)
-        saved = dict(os.environ)
-        try:
-            os.environ["HOME"] = root
-            os.environ["PATH"] = f"{root}/node_modules/.bin:{root}:/usr/bin:{root}/bin:relative/bin"
-            # A bin directory comes with its installation (/usr for /usr/bin); the
-            # home directory itself and the wrapper's own directories never.
-            self.assertEqual(path_tools(ctx), [f"{root}/node_modules/.bin", "/usr"])
-        finally:
-            os.environ.clear()
-            os.environ.update(saved)
+        path = [f"{node}/bin", os.path.join(home, "scripts"), home, tmp, "/usr/bin", f"{home}/.ssh/bin",
+                f"{root}/bin", f"{root}/libexec", f"{home}/missing/bin", "relative/bin"]
+        # The test tree lies in a temp directory, itself never readable.
+        with mock.patch.dict(os.environ, {"HOME": home, "PATH": ":".join(path)}), \
+                mock.patch("claude_secure_sandbox.access.TEMP_DIRS", []), \
+                mock.patch("claude_secure_sandbox.access.user_temp_dirs", return_value=[]):
+            # A bin directory comes with its installation (~/.nvm/versions/node/v22,
+            # /usr); never the home directory or above, a secret, the wrapper's own
+            # directories, a missing or relative one.
+            self.assertEqual(path_tools(ctx), [node, os.path.join(home, "scripts"), "/usr"])
 
 
 class UrlHostTest(unittest.TestCase):
