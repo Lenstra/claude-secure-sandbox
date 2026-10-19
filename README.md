@@ -216,4 +216,6 @@ Everything else is in the [architecture document](docs/ARCHITECTURE.md):
 - [sessions outside protected repositories](docs/ARCHITECTURE.md#4-interception-and-sessions), and [what Claude can read on your computer](docs/ARCHITECTURE.md#reading-an-allowlist-where-users-files-live);
 - [why there is no configuration file](docs/ARCHITECTURE.md#10-configuration), [troubleshooting](docs/ARCHITECTURE.md#troubleshooting) and [limits](docs/ARCHITECTURE.md#14-limits-and-troubleshooting).
 
+The rules the project keeps (security, the wrapper's state, repositories, code, tests and commits) are in [CLAUDE.md](CLAUDE.md), for contributors and for Claude working on this repository.
+
 Tests: `npm test` (unit tests, then end-to-end tests in the real sandbox; `jq` required), `npm run test:linux` for the same suite on Linux, in Docker, and `python3 tests/tui-smoke.py` for the real Claude Code in a terminal. The CI runs the unit tests, then the end-to-end suite and the terminal test on macOS and on Ubuntu (x64 and arm64).
